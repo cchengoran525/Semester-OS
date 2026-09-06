@@ -21,6 +21,7 @@ export function scheduleBlocksForDate(date: Date, courses: Course[], settings: P
         context: course.id,
         taskIds: [],
         status: 'PLANNED',
+        notes: slot.location,
       });
     }
   }

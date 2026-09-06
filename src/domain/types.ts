@@ -30,6 +30,8 @@ export interface ScheduleSlot {
   startTime: string; // "09:00"
   endTime: string; // "10:00"
   recurrence: Recurrence;
+  /** 上课地点（教室），可选 */
+  location?: string;
 }
 
 export interface Course {
@@ -147,7 +149,31 @@ export interface Settings {
   wipLimit: number;
   defaultTaskEstimate: number;
   theme: 'DARK' | 'LIGHT' | 'SYSTEM';
+  /** 全局字体缩放（zoom），1 = 标准。可选，向后兼容。 */
+  fontScale?: number;
   initialized: boolean;
+  /** 自定义路线图备注，key = "2026-09" 月份标签。可选，向后兼容。 */
+  roadmapNotes?: Record<string, string>;
+  /**
+   * AI 助手配置（OpenAI 兼容接口）。可选：未配置时所有 AI 功能自动停用。
+   * Key 保存在本地 IndexedDB，不进构建产物、不随 Export 泄露给第三方服务
+   * （只有在用户主动触发 AI 功能时才会把汇总数据发给所配置的服务商）。
+   */
+  ai?: {
+    /** 快速模型（简报 / 复盘起草 / 任务拆解等轻任务）。OpenAI 兼容 Base URL */
+    baseUrl: string;
+    apiKey: string;
+    model: string;
+    /**
+     * 深度模型（周计划等深度规划），可选。逐字段回落到快速模型：
+     * 只填模型名 = 同 Key 同地址换个更强的模型。
+     */
+    deep?: {
+      baseUrl?: string;
+      apiKey?: string;
+      model?: string;
+    };
+  };
 }
 
 export interface ExportBundle {
@@ -168,12 +194,44 @@ export interface ExportBundle {
 export const ESTIMATE_OPTIONS = [15, 30, 45, 60, 90, 120, 180];
 
 export const BLOCK_TYPE_LABELS: Record<BlockType, string> = {
-  COURSE: 'COURSE',
-  DEEP_WORK: 'DEEP WORK',
-  ENGINEERING: 'ENGINEERING',
-  ADMIN: 'ADMIN',
-  ENGLISH: 'ENGLISH',
-  RECOVERY: 'RECOVERY',
+  COURSE: '课程',
+  DEEP_WORK: '深度工作',
+  ENGINEERING: '工程',
+  ADMIN: '事务',
+  ENGLISH: '英语',
+  RECOVERY: '休息',
+};
+
+export const PRIORITY_LABELS: Record<Priority, string> = {
+  HIGH: '高',
+  MEDIUM: '中',
+  LOW: '低',
+};
+
+export const HEALTH_LABELS: Record<Health, string> = {
+  GREEN: '良好',
+  YELLOW: '需注意',
+  RED: '告急',
+};
+
+export const PROJECT_STATUS_LABELS: Record<ProjectStatus, string> = {
+  BACKLOG: '待启动',
+  ACTIVE: '进行中',
+  PAUSED: '已暂停',
+  DONE: '已完成',
+};
+
+export const TASK_STATUS_LABELS: Record<TaskStatus, string> = {
+  BACKLOG: '待定',
+  READY: '待办',
+  DOING: '进行中',
+  DONE: '已完成',
+};
+
+export const BLOCK_SOURCE_LABELS: Record<BlockSource, string> = {
+  SCHEDULE: '课程表',
+  USER: '手动',
+  SUGGESTED: '建议',
 };
 
 export const ESTIMATES_ALLOWED = [15, 30, 45, 60, 90, 120, 180] as const;

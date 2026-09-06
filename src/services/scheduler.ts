@@ -1,9 +1,10 @@
-import type {
-  Block,
-  Course,
-  Priority,
-  Project,
-  Task,
+import {
+  HEALTH_LABELS,
+  type Block,
+  type Course,
+  type Priority,
+  type Project,
+  type Task,
 } from '../domain/types';
 import { minutesBetween, toDate } from './timeService';
 
@@ -75,7 +76,7 @@ export function rankTasks(tasks: Task[], ctx: RankContext): RankedTask[] {
       const reasons: string[] = [];
 
       score += PRIORITY_WEIGHT[task.priority];
-      if (task.priority === 'HIGH') reasons.push('优先级 HIGH');
+      if (task.priority === 'HIGH') reasons.push('优先级：高');
 
       if (task.courseId) {
         const course = courseById.get(task.courseId);
@@ -88,7 +89,7 @@ export function rankTasks(tasks: Task[], ctx: RankContext): RankedTask[] {
             course.debt.exam;
           score += debt * 5;
           if (course.health !== 'GREEN')
-            reasons.push(`${course.name} 当前 ${course.health}`);
+            reasons.push(`${course.name} 当前${HEALTH_LABELS[course.health]}`);
           if (debt > 0) reasons.push(`${course.name} 有 ${debt} 项债务`);
         }
       }
@@ -97,7 +98,7 @@ export function rankTasks(tasks: Task[], ctx: RankContext): RankedTask[] {
         const project = projectById.get(task.projectId);
         if (project?.status === 'ACTIVE') {
           score += 20;
-          reasons.push(`${project.name} 为 Active 项目`);
+          reasons.push(`${project.name} 是进行中项目`);
           const logged = ctx.contextMinutesThisWeek[project.id] ?? 0;
           if (logged < 120) {
             score += 10;
@@ -130,6 +131,20 @@ export function rankTasks(tasks: Task[], ctx: RankContext): RankedTask[] {
 }
 
 // ── Schedule suggestion ──────────────────────────────────────────────
+
+/**
+ * Tasks already attached to a live (PLANNED/ACTIVE) block. Suggesting a
+ * time slot for a task the user has already placed is noise — the adoption
+ * loop would otherwise re-propose the same task in the next free window.
+ */
+export function scheduledTaskIds(blocks: Block[]): Set<string> {
+  const ids = new Set<string>();
+  for (const b of blocks) {
+    if (b.status === 'DONE') continue;
+    for (const id of b.taskIds) ids.add(id);
+  }
+  return ids;
+}
 
 export interface FreeWindow {
   start: string;

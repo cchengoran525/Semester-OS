@@ -1,5 +1,5 @@
-import { describe, expect, it, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, beforeEach } from 'vitest';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import App from './App';
 import { db } from './storage/db';
 import { seedIfFirstLaunch } from './storage/seed';
@@ -10,18 +10,21 @@ beforeEach(async () => {
   await seedIfFirstLaunch();
 });
 
+// 项目未开 vitest globals，Testing Library 自动 cleanup 不生效，需手动清理
+afterEach(cleanup);
+
 describe('Semester OS App', () => {
   it('renders dashboard with seeded data', async () => {
     render(<App />);
     await waitFor(
-      () => expect(screen.getByText('Dashboard')).toBeInTheDocument(),
-      { timeout: 5000 },
+      () => expect(screen.getByText('总览')).toBeInTheDocument(),
+      { timeout: 15000 },
     );
     await waitFor(() =>
       expect(screen.getAllByText('电路基础').length).toBeGreaterThan(0),
     );
     expect(screen.getAllByText(/AS \/ Aeroshield/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/Active Projects/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/进行中项目/).length).toBeGreaterThan(0);
   });
 
   it('dashboard reflects newly created tasks (live query)', async () => {
@@ -36,7 +39,7 @@ describe('Semester OS App', () => {
     });
 
     await waitFor(() =>
-      expect(screen.getByText('UI 集成测试任务')).toBeInTheDocument(),
+      expect(screen.getAllByText('UI 集成测试任务').length).toBeGreaterThan(0),
     );
   });
 

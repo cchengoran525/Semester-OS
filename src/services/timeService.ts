@@ -21,6 +21,8 @@ import type { ScheduleSlot } from '../domain/types';
 export const ISO_DATETIME = "yyyy-MM-dd'T'HH:mm:ss";
 export const ISO_DATE = 'yyyy-MM-dd';
 
+const WEEKDAY_NAMES = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+
 export function todayDate(): Date {
   return new Date();
 }
@@ -51,7 +53,7 @@ export function formatDateShort(iso: string): string {
 }
 
 export function formatDateLong(d: Date): string {
-  return format(d, 'yyyy-MM-dd EEE');
+  return `${format(d, 'yyyy-MM-dd')} ${WEEKDAY_NAMES[d.getDay()]}`;
 }
 
 export function minutesBetween(startISO: string, endISO: string): number {
@@ -61,12 +63,12 @@ export function minutesBetween(startISO: string, endISO: string): number {
 }
 
 export function durationLabel(minutes: number): string {
-  if (minutes <= 0) return '0m';
+  if (minutes <= 0) return '0 分钟';
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
-  if (h === 0) return `${m}m`;
-  if (m === 0) return `${h}h`;
-  return `${h}h ${m}m`;
+  if (h === 0) return `${m} 分钟`;
+  if (m === 0) return `${h} 小时`;
+  return `${h} 小时 ${m} 分`;
 }
 
 export function weekStart(d: Date, weekStartsOn: 0 | 1 = 1): Date {
@@ -124,6 +126,7 @@ export function slotOccursOn(
   const isoWeekday = ((date.getDay() + 6) % 7) + 1; // 1=Mon..7=Sun
   if (slot.weekday !== isoWeekday) return false;
   const tw = teachingWeek(semesterStartISO, date);
+  if (tw < 1) return false; // 学期还没开始，不显示课
   if (slot.recurrence === 'WEEKLY') return true;
   if (slot.recurrence === 'ODD_WEEK') return tw % 2 === 1;
   return tw % 2 === 0;

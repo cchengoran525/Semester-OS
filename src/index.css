@@ -1,4 +1,5 @@
 :root {
+  --font-scale: 1;
   color-scheme: dark;
   --bg: #0d0f12;
   --bg-panel: #14171c;
@@ -7,8 +8,8 @@
   --border: #262b33;
   --border-strong: #333a44;
   --text: #d7dce3;
-  --text-dim: #8a93a0;
-  --text-faint: #5c6572;
+  --text-dim: #9aa5b3;
+  --text-faint: #7d8794;
   --accent: #4f9cf7;
   --accent-dim: #2c5f9e;
   --green: #3ecf8e;
@@ -51,7 +52,7 @@ body {
   color: var(--text);
   font-family: -apple-system, 'Segoe UI', 'PingFang SC', 'Helvetica Neue',
     sans-serif;
-  font-size: 13.5px;
+  font-size: calc(15.5px * var(--font-scale));
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
@@ -81,7 +82,7 @@ body {
 
 .sidebar .brand {
   font-family: var(--mono);
-  font-size: 13px;
+  font-size: calc(15px * var(--font-scale));
   font-weight: 600;
   letter-spacing: 0.04em;
   padding: 4px 10px 16px;
@@ -103,7 +104,7 @@ body {
   border-radius: 5px;
   color: var(--text-dim);
   text-decoration: none;
-  font-size: 13px;
+  font-size: calc(15px * var(--font-scale));
   border: 1px solid transparent;
 }
 
@@ -137,7 +138,7 @@ body {
 }
 
 .page-header h1 {
-  font-size: 16px;
+  font-size: calc(18.5px * var(--font-scale));
   font-weight: 600;
   margin: 0;
   letter-spacing: 0.01em;
@@ -146,7 +147,7 @@ body {
 .page-header .sub {
   color: var(--text-dim);
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: calc(14px * var(--font-scale));
 }
 
 /* Panels & cards */
@@ -158,7 +159,7 @@ body {
 }
 
 .panel h2 {
-  font-size: 11px;
+  font-size: calc(12.5px * var(--font-scale));
   font-weight: 600;
   color: var(--text-faint);
   letter-spacing: 0.12em;
@@ -173,10 +174,28 @@ body {
 }
 
 .dashboard-grid {
+  column-count: 2;
+  column-gap: 14px;
+}
+
+/* Dashboard 双列瀑布流：左右两列各自向上堆 */
+.dash-cols {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
-  grid-template-columns: 1fr 1fr;
   align-items: start;
+}
+.dash-cols > div {
+  min-width: 0;
+}
+
+/* Masonry packing: panels flow upward, no holes between rows */
+.dashboard-grid > .panel {
+  break-inside: avoid;
+  margin-bottom: 14px;
+}
+.dashboard-grid .panel > h2:first-child {
+  margin-top: 0;
 }
 
 /* Buttons */
@@ -192,7 +211,7 @@ button {
   border-radius: 5px;
   color: var(--text);
   padding: 5px 12px;
-  font-size: 12.5px;
+  font-size: calc(14.5px * var(--font-scale));
   transition: background 0.12s;
 }
 
@@ -218,7 +237,7 @@ button {
 
 .btn.small {
   padding: 2px 8px;
-  font-size: 11.5px;
+  font-size: calc(13px * var(--font-scale));
 }
 
 /* Forms */
@@ -231,7 +250,7 @@ textarea {
   border-radius: 5px;
   color: var(--text);
   padding: 6px 9px;
-  font-size: 13px;
+  font-size: calc(15px * var(--font-scale));
 }
 
 input:focus,
@@ -248,7 +267,7 @@ label.field {
 
 label.field span {
   display: block;
-  font-size: 11px;
+  font-size: calc(12.5px * var(--font-scale));
   color: var(--text-dim);
   margin-bottom: 4px;
   font-family: var(--mono);
@@ -277,7 +296,7 @@ label.field textarea {
 .tag {
   display: inline-block;
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: calc(11.5px * var(--font-scale));
   letter-spacing: 0.06em;
   padding: 1px 6px;
   border-radius: 3px;
@@ -327,12 +346,12 @@ label.field textarea {
 
 .block-card .time {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: calc(14px * var(--font-scale));
   color: var(--text-dim);
 }
 
 .block-card .label {
-  font-size: 12.5px;
+  font-size: calc(14.5px * var(--font-scale));
   margin-top: 1px;
 }
 
@@ -340,8 +359,305 @@ label.field textarea {
   margin: 4px 0 0;
   padding-left: 2px;
   list-style: none;
-  font-size: 12px;
+  font-size: calc(14px * var(--font-scale));
   color: var(--text-dim);
+}
+
+/* Block cards tinted by type: 课程蓝 / 深度工作紫 / 工程绿 / 事务灰 / 英语青 / 休息橙 */
+.block-card.type-COURSE     { background: rgba(59, 130, 246, 0.10); border-color: rgba(59, 130, 246, 0.35); }
+.block-card.type-DEEP_WORK  { background: rgba(168, 85, 247, 0.10); border-color: rgba(168, 85, 247, 0.35); }
+.block-card.type-ENGINEERING{ background: rgba(34, 197, 94, 0.09);  border-color: rgba(34, 197, 94, 0.35); }
+.block-card.type-ADMIN      { background: rgba(148, 163, 184, 0.08); }
+.block-card.type-ENGLISH    { background: rgba(20, 184, 166, 0.10); border-color: rgba(20, 184, 166, 0.35); }
+.block-card.type-RECOVERY   { background: rgba(251, 146, 60, 0.08); border-color: rgba(251, 146, 60, 0.30); }
+
+/* 固定课程块（课程表生成，不可拖动/删除）：灰色底，与可调的课程任务块区分 */
+.block-card.schedule {
+  background: rgba(120, 130, 145, 0.08) !important;
+  border-color: var(--border) !important;
+}
+
+/* Project kanban */
+.kanban {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  align-items: start;
+}
+.kanban-col {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  padding: 10px;
+  min-height: 220px;
+}
+.kanban-col.col-ACTIVE {
+  background: rgba(34, 197, 94, 0.07);
+  border-color: rgba(34, 197, 94, 0.4);
+}
+.kanban-col.col-DONE {
+  background: rgba(148, 163, 184, 0.05);
+}
+.kanban-col.col-PAUSED {
+  background: rgba(251, 146, 60, 0.05);
+}
+.kanban-col.drag-over {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+}
+.project-card {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  cursor: grab;
+}
+.project-card.dragging {
+  opacity: 0.5;
+}
+.kanban-scroll {
+  max-height: 260px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+/* 新建时间块弹窗里的关联任务行：勾选框 | 标题 | 上下文 三列对齐 */
+.modal-task-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 2px;
+}
+.modal-task-row .modal-task-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.modal-task-row .modal-task-context {
+  flex-shrink: 0;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 一天全景长条 */
+.day-timeline {
+  margin: 2px 0 10px;
+}
+.dtl-track {
+  position: relative;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.dtl-seg {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  border-radius: 3px;
+  min-width: 2px;
+}
+.dtl-seg.dtl-done {
+  opacity: 0.45;
+}
+.dtl-now {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  width: 2px;
+  background: #e5484d;
+}
+.dtl-preview {
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  border: 1.5px dashed var(--accent);
+  background: rgba(79, 156, 247, 0.18);
+  border-radius: 3px;
+  pointer-events: none;
+}
+.dtl-interactive {
+  cursor: copy;
+}
+.dtl-over {
+  border-color: var(--accent);
+}
+
+.dtl-ticks {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--mono);
+  font-size: calc(11.5px * var(--font-scale));
+  color: var(--text-dim);
+  margin-top: 2px;
+}
+
+/* 注意力账本：今日安排头部的供给统计 */
+.ledger {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: baseline;
+  font-size: calc(14.5px * var(--font-scale));
+  padding: 6px 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 6px;
+  margin-bottom: 8px;
+}
+.ledger strong {
+  font-size: calc(15px * var(--font-scale));
+  color: var(--text);
+}
+
+/* 块卡片里的任务行：真复选框 + 可拖拽标题 */
+.block-task-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  cursor: grab;
+  list-style: none;
+}
+.block-task-item .checkbox {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  font-size: calc(10px * var(--font-scale));
+  line-height: 1;
+}
+.block-task-item .block-task-title.done {
+  text-decoration: line-through;
+  color: var(--text-dim);
+}
+
+/* 已完成的时间块：整体退后，不再像待办一样喊叫 */
+.block-card.done {
+  opacity: 0.55;
+}
+
+.kanban-col.col-DOING {
+  background: rgba(59, 130, 246, 0.06);
+  border-color: rgba(59, 130, 246, 0.35);
+}
+
+/* Context chip (project/course) on a block card — a tag, not the title */
+.context-chip {
+  font-size: calc(12px * var(--font-scale));
+  padding: 1px 6px;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ✕ delete button on a block card */
+.block-del {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: calc(12.5px * var(--font-scale));
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+.block-del:hover {
+  color: #e5484d;
+  background: var(--bg-hover);
+}
+
+/* Free time slots in 今日安排 — drop a task here to book exactly this window */
+.free-chip {
+  font-family: var(--mono);
+  font-size: calc(12.5px * var(--font-scale));
+  color: var(--text-dim);
+  border: 1px dashed var(--border-strong);
+  border-radius: 999px;
+  padding: 2px 8px;
+  cursor: copy;
+}
+.free-chip.drag-over {
+  border-color: var(--accent);
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+/* 早 / 午 / 晚 segments in the calendar day column */
+.day-segment {
+  margin: 4px 0 2px;
+}
+.day-segment-label {
+  display: block;
+  font-size: calc(11.5px * var(--font-scale));
+  font-family: var(--mono);
+  color: var(--text-dim);
+  border-top: 1px dashed var(--border);
+  padding-top: 2px;
+  margin-bottom: 2px;
+}
+
+/* Horizontal sticky-note strip (复盘已完成 / 日历待排) */
+.sticky-strip {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+.sticky-note {
+  flex: 0 0 auto;
+  min-width: 200px;
+  max-width: 260px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  padding: 7px 9px;
+  font-size: calc(14px * var(--font-scale));
+}
+.sticky-note .sticky-title {
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+/* 看板里的任务便签：宽度跟随列，不设最小宽 */
+.kanban-note {
+  min-width: 0;
+  width: 100%;
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+
+.sticky-note .mono {
+  color: var(--text-dim);
+}
+
+/* 日历待排便签：完整可读模式 —— 标题/副标题换行，元信息整行铺开 */
+.sticky-note .task-row {
+  display: block;
+}
+.sticky-note .task-row .checkbox {
+  float: left;
+  margin: 2px 8px 0 0;
+}
+.sticky-note .task-row .title {
+  display: block;
+  margin-bottom: 5px;
+}
+.sticky-note .task-row .task-title-main,
+.sticky-note .task-row .task-title-sub {
+  display: block;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  line-height: 1.45;
+}
+.sticky-note .task-row .tag,
+.sticky-note .task-row .mono {
+  display: inline-block;
+  margin-right: 6px;
 }
 
 /* Tasks */
@@ -367,6 +683,19 @@ label.field textarea {
 .task-row .title {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  cursor: default;
+}
+
+/* 默认单行省略；便签卡（.sticky-note）里放开换行，完整阅读 */
+.task-title-main {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-title-sub {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -382,7 +711,7 @@ label.field textarea {
   align-items: center;
   justify-content: center;
   color: var(--green);
-  font-size: 10px;
+  font-size: calc(11.5px * var(--font-scale));
   line-height: 1;
   flex-shrink: 0;
   padding: 0;
@@ -430,7 +759,7 @@ label.field textarea {
 
 .modal h3 {
   margin: 0 0 14px;
-  font-size: 14px;
+  font-size: calc(16px * var(--font-scale));
   font-weight: 600;
 }
 
@@ -458,7 +787,7 @@ label.field textarea {
 
 .calendar-day .day-head {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: calc(12.5px * var(--font-scale));
   color: var(--text-dim);
   margin-bottom: 6px;
   display: flex;
@@ -484,7 +813,7 @@ label.field textarea {
   border: 1px solid var(--border-strong);
   border-radius: 6px;
   padding: 8px 16px;
-  font-size: 13px;
+  font-size: calc(15px * var(--font-scale));
   z-index: 100;
 }
 
@@ -503,19 +832,55 @@ label.field textarea {
   padding: 7px 12px;
   margin-bottom: 12px;
   color: var(--yellow);
-  font-size: 12.5px;
+  font-size: calc(14.5px * var(--font-scale));
   background: color-mix(in srgb, var(--yellow) 6%, transparent);
+}
+
+/* AI thinking indicator */
+.ai-thinking {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 6px;
+  padding: 7px 12px;
+  margin: 8px 0;
+  font-size: calc(13px * var(--font-scale));
+  color: var(--text-muted, var(--text));
+}
+.ai-thinking-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: ai-pulse 1.2s ease-in-out infinite;
+}
+.ai-thinking-ms {
+  color: var(--text-faint);
+  font-size: calc(12px * var(--font-scale));
+}
+@keyframes ai-pulse {
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.2);
+  }
 }
 
 .empty-state {
   color: var(--text-faint);
-  font-size: 12.5px;
+  font-size: calc(14.5px * var(--font-scale));
   padding: 14px 4px;
 }
 
 .kbd {
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: calc(11.5px * var(--font-scale));
   border: 1px solid var(--border-strong);
   border-radius: 3px;
   padding: 0 4px;
@@ -524,12 +889,19 @@ label.field textarea {
 
 .muted { color: var(--text-dim); }
 .faint { color: var(--text-faint); }
-.small { font-size: 12px; }
+.small { font-size: calc(14px * var(--font-scale)); }
 
 .stack > * + * { margin-top: 8px; }
 
-.draggable {
+.draggable,
+.project-card,
+.block-card.draggable,
+.block-task-item {
   cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.draggable {
 }
 
 .dragging {
@@ -537,7 +909,8 @@ label.field textarea {
 }
 
 @media (max-width: 960px) {
-  .dashboard-grid { grid-template-columns: 1fr; }
+  .dashboard-grid { column-count: 1; }
+  .dash-cols { grid-template-columns: 1fr; }
   .app-shell { flex-direction: column; }
   .sidebar {
     width: 100%;

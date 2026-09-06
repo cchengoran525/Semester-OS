@@ -21,70 +21,83 @@ const slot = (
   startTime: string,
   endTime: string,
   recurrence: ScheduleSlot['recurrence'] = 'WEEKLY',
-): ScheduleSlot => ({ weekday, startTime, endTime, recurrence });
+  location?: string,
+): ScheduleSlot => ({ weekday, startTime, endTime, recurrence, location });
 
 const noDebt = { understanding: 0, assignment: 0, review: 0, exam: 0 };
 
+/**
+ * 2026 秋季学期真实课表（1-16 周）。课节时间：
+ * 1-2: 08:00–09:50 · 3-4: 10:20–12:10 · 5-6: 14:00–15:50 · 7-8: 16:20–18:10 · 9-10: 19:00–20:50
+ * 「双周」= 教学偶数周（2,4,…,16）。
+ */
 export function seedCourses(): Omit<Course, 'id'>[] {
   return [
     {
-      name: '电路基础',
-      schedule: [slot(1, '17:00', '18:00')],
-      health: 'GREEN',
-      debt: { ...noDebt },
-      teacher: '',
-    },
-    {
-      name: '电子技术基础',
-      schedule: [slot(2, '17:00', '18:00'), slot(5, '09:00', '10:00', 'EVEN_WEEK')],
+      name: '习近平新时代中国特色社会主义思想概论',
+      teacher: '杨少曼',
+      schedule: [slot(1, '14:00', '15:50', 'WEEKLY', '商学院101')],
       health: 'GREEN',
       debt: { ...noDebt },
     },
     {
       name: '控制工程数学基础',
-      schedule: [slot(1, '19:00', '20:00'), slot(3, '21:00', '22:00')],
-      health: 'YELLOW',
-      debt: { understanding: 2, assignment: 0, review: 1, exam: 0 },
-    },
-    {
-      name: '信号与线性系统分析',
-      schedule: [slot(3, '09:00', '10:00', 'ODD_WEEK'), slot(5, '15:00', '16:00')],
-      health: 'YELLOW',
-      debt: { understanding: 1, assignment: 0, review: 1, exam: 0 },
-    },
-    {
-      name: 'C/C++程序设计基础',
-      schedule: [slot(3, '17:00', '18:00'), slot(5, '21:00', '22:00')],
-      health: 'GREEN',
-      debt: { ...noDebt },
-    },
-    {
-      name: '习近平新时代中国特色社会主义思想概论',
-      schedule: [slot(1, '15:00', '16:00')],
+      teacher: '朱博浩',
+      schedule: [
+        slot(1, '16:20', '18:10', 'WEEKLY', '智华楼208'),
+        slot(3, '19:00', '20:50', 'WEEKLY', '智华楼208'),
+      ],
       health: 'GREEN',
       debt: { ...noDebt },
     },
     {
       name: 'EAP',
-      schedule: [slot(2, '15:00', '16:00')],
+      teacher: '李卓',
+      schedule: [slot(2, '10:20', '12:10', 'WEEKLY', '一教302')],
       health: 'GREEN',
       debt: { ...noDebt },
     },
     {
-      name: '中国近现代史纲要',
-      schedule: [slot(2, '19:00', '20:00')],
+      name: '电子技术基础',
+      teacher: '胡颀',
+      schedule: [
+        slot(2, '14:00', '15:50', 'WEEKLY', '智华楼208'),
+        slot(5, '08:00', '09:50', 'EVEN_WEEK', '智华楼208'),
+      ],
       health: 'GREEN',
       debt: { ...noDebt },
     },
     {
-      name: '体育 III',
-      schedule: [slot(2, '21:00', '22:00')],
+      name: '电路基础',
+      teacher: '李晓阳',
+      schedule: [slot(2, '16:20', '18:10', 'WEEKLY', '一教306')],
+      health: 'GREEN',
+      debt: { ...noDebt },
+    },
+    {
+      name: '信号与线性系统分析',
+      teacher: '周琳',
+      schedule: [
+        slot(3, '08:00', '09:50', 'EVEN_WEEK', '一教107'),
+        slot(5, '10:20', '12:10', 'WEEKLY', '一教107'),
+      ],
+      health: 'GREEN',
+      debt: { ...noDebt },
+    },
+    {
+      name: 'C/C++程序设计基础',
+      teacher: '刘涛',
+      schedule: [
+        slot(3, '14:00', '15:50', 'WEEKLY', '智华楼108'),
+        slot(5, '19:00', '20:50', 'WEEKLY', '智华楼508机房'),
+      ],
       health: 'GREEN',
       debt: { ...noDebt },
     },
     {
       name: '电子技术实验',
-      schedule: [slot(5, '17:00', '18:00')],
+      teacher: '胡颀/尉进',
+      schedule: [slot(5, '14:00', '15:50', 'WEEKLY', '创园10栋402')],
       health: 'GREEN',
       debt: { ...noDebt },
     },
@@ -254,7 +267,7 @@ export async function seedIfFirstLaunch(): Promise<boolean> {
     {
       id: 't3',
       title: '整理信号系统第一章卷积例题',
-      courseId: 'c4',
+      courseId: 'c6',
       estimateMinutes: 45,
       priority: 'MEDIUM',
       status: 'READY',
@@ -263,7 +276,7 @@ export async function seedIfFirstLaunch(): Promise<boolean> {
     {
       id: 't4',
       title: '控制工程数学：补齐第 2 章未理解部分',
-      courseId: 'c3',
+      courseId: 'c2',
       estimateMinutes: 90,
       priority: 'MEDIUM',
       status: 'BACKLOG',
@@ -272,7 +285,7 @@ export async function seedIfFirstLaunch(): Promise<boolean> {
     {
       id: 't5',
       title: '电路基础 2.3 节习题 8/11/15',
-      courseId: 'c1',
+      courseId: 'c5',
       estimateMinutes: 45,
       priority: 'MEDIUM',
       status: 'READY',

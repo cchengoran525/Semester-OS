@@ -2,9 +2,10 @@ import { describe, expect, it } from 'vitest';
 import type { Block, Course, Project, Task } from '../domain/types';
 import { suggestHealth, totalDebt, healthDrift, courseWarnings } from './courseService';
 import { milestoneProgress, wipStatus } from './projectService';
-import { attentionAllocation, deepWorkBreakdown, estimateVsActual, taskCounts } from './statistics';
+import { attentionAllocation, deepWorkBreakdown, estimateVsActual, openUnscheduledTasks, taskCounts } from './statistics';
 import { conflictsWith, findConflicts, freeWindows, rankTasks } from './scheduler';
 import { minutesBetween } from './timeService';
+import { handleTaskUnschedule, shiftBlockToDay } from './dropActions';
 
 const noDebt = { understanding: 0, assignment: 0, review: 0, exam: 0 };
 
@@ -41,14 +42,16 @@ describe('courseService', () => {
 });
 
 describe('projectService', () => {
-  it('computes milestone progress with DOING as half', () => {
+  it('每个完成的里程碑固定加 1%', () => {
     const ms = [
       { id: '1', projectId: 'p', name: 'M0', order: 0, status: 'DONE' as const },
       { id: '2', projectId: 'p', name: 'M1', order: 1, status: 'DOING' as const },
       { id: '3', projectId: 'p', name: 'M2', order: 2, status: 'TODO' as const },
       { id: '4', projectId: 'p', name: 'M3', order: 3, status: 'TODO' as const },
     ];
-    expect(milestoneProgress(ms)).toBe(38); // (1 + 0.5) / 4
+    expect(milestoneProgress(ms)).toBe(1); // 1 个完成 = 1%
+    expect(milestoneProgress([{ id: '1', projectId: 'p', name: 'M0', order: 0, status: 'DONE' as const }])).toBe(1);
+    expect(milestoneProgress([])).toBe(0);
   });
   it('handles empty milestones', () => {
     expect(milestoneProgress([])).toBe(0);
@@ -105,6 +108,20 @@ describe('statistics', () => {
     expect(acc).toHaveLength(1);
     expect(acc[0].actual).toBe(170);
   });
+  it('openUnscheduledTasks hides tasks attached to any live block (date-independent)', () => {
+    const tasks: Task[] = [
+      { id: 't1', title: '已排进过去块', estimateMinutes: 30, priority: 'MEDIUM', status: 'READY', createdAt: '' },
+      { id: 't2', title: '还没排', estimateMinutes: 30, priority: 'MEDIUM', status: 'READY', createdAt: '' },
+      { id: 't3', title: '在已完成块里但仍未完成', estimateMinutes: 30, priority: 'MEDIUM', status: 'READY', createdAt: '' },
+    ];
+    const blocks: Block[] = [
+      { id: 'b1', start: '2026-09-05T14:00:00', end: '2026-09-05T15:00:00', type: 'DEEP_WORK', source: 'USER', taskIds: ['t1'], status: 'PLANNED' },
+      { id: 'b2', start: '2026-09-05T09:00:00', end: '2026-09-05T10:00:00', type: 'COURSE', source: 'USER', taskIds: ['t3'], status: 'DONE' },
+    ];
+    const open = openUnscheduledTasks(tasks, blocks);
+    expect(open.map((t) => t.id)).toEqual(['t2', 't3']);
+    expect(openUnscheduledTasks(tasks, blocks, 1)).toHaveLength(1);
+  });
   it('taskCounts counts overdue open tasks', () => {
     const tasks: Task[] = [
       { id: '1', title: 'a', estimateMinutes: 0, priority: 'LOW', status: 'DONE', createdAt: '' },
@@ -114,6 +131,29 @@ describe('statistics', () => {
     expect(c.done).toBe(1);
     expect(c.overdue).toBe(1);
     expect(c.open).toBe(1);
+  });
+});
+
+describe('dropActions', () => {
+  it('shiftBlockToDay keeps time of day and survives month boundaries', () => {
+    const block: Block = {
+      id: 'b1',
+      start: '2026-08-31T22:30:00',
+      end: '2026-09-01T00:30:00',
+      type: 'DEEP_WORK',
+      source: 'USER',
+      taskIds: [],
+      status: 'PLANNED',
+    };
+    const moved = shiftBlockToDay(block, '2026-09-05');
+    expect(moved.start).toBe('2026-09-05T22:30:00');
+    expect(moved.end).toBe('2026-09-06T00:30:00');
+  });
+
+  it('handleTaskUnschedule reports when the task is in no block', async () => {
+    const task: Task = { id: 't1', title: '自由任务', estimateMinutes: 30, priority: 'LOW', status: 'READY', createdAt: '' };
+    const res = await handleTaskUnschedule(task, []);
+    expect(res.message).toContain('不在任何时间块里');
   });
 });
 
@@ -152,7 +192,7 @@ describe('scheduler', () => {
     const ranked = rankTasks(tasks, { courses, projects, contextMinutesThisWeek: {}, now: new Date() });
     expect(ranked[0].task.id).toBe('t2');
     expect(ranked[1].task.id).toBe('t3');
-    expect(ranked.find((r) => r.task.id === 't4')!.reasons).toContain('AS 为 Active 项目');
+    expect(ranked.find((r) => r.task.id === 't4')!.reasons).toContain('AS 是进行中项目');
     expect(ranked.at(-1)!.task.id).toBe('t1');
   });
 });

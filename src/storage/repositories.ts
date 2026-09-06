@@ -162,6 +162,10 @@ export const blockRepo = {
     await db.blocks.put(b);
     return b;
   },
+  /** Re-insert a block with its original id (undo / restore support). */
+  async restore(block: Block): Promise<void> {
+    await db.blocks.put(block);
+  },
   async update(id: ID, patch: Partial<Block>): Promise<void> {
     await db.blocks.update(id, patch);
   },

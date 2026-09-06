@@ -114,3 +114,34 @@ export function taskCounts(tasks: Task[]): {
     today,
   };
 }
+
+/**
+ * Open (READY/DOING) tasks not attached to any live (PLANNED/ACTIVE) block —
+ * i.e. what still belongs in a "待排任务" list. Date-independent by design:
+ * once a task lives in a block (past or future) it has been given attention
+ * and leaves the pool; it returns only when dragged back out or the block
+ * is deleted.
+ */
+export function openUnscheduledTasks(
+  tasks: Task[],
+  blocks: Block[],
+  limit = Infinity,
+): Task[] {
+  const scheduled = scheduledTaskIdSet(blocks);
+  return tasks
+    .filter(
+      (t) =>
+        (t.status === 'READY' || t.status === 'DOING') &&
+        !scheduled.has(t.id),
+    )
+    .slice(0, limit);
+}
+
+function scheduledTaskIdSet(blocks: Block[]): Set<string> {
+  const ids = new Set<string>();
+  for (const b of blocks) {
+    if (b.status === 'DONE') continue;
+    for (const id of b.taskIds) ids.add(id);
+  }
+  return ids;
+}

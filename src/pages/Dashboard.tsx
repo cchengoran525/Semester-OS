@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   DndContext,
   DragOverlay,
@@ -6,13 +6,17 @@ import {
   useSensor,
   useSensors,
   type DragEndEvent,
+  type DragOverEvent,
   type DragStartEvent,
 } from '@dnd-kit/core';
 import { AlertTriangle, ChevronDown, ChevronRight } from 'lucide-react';
 import { useApp } from '../components/AppProvider';
 import {
+  AIThinking,
   Bar,
   BlockCard,
+  DayTimeline,
+  DropZone,
   EmptyState,
   HealthDot,
   TaskRow,
@@ -20,24 +24,34 @@ import {
 } from '../components/common';
 import { makeLabelResolver } from '../components/labels';
 import * as repos from '../storage/repositories';
-import { useToast } from '../store/uiStore';
+import { useDismissedSuggestions, useToast, useUndo } from '../store/uiStore';
 import {
   BLOCK_TYPE_LABELS,
+  HEALTH_LABELS,
   type Block,
   type BlockType,
   type Task,
 } from '../domain/types';
 import {
+  attentionAllocation,
   blocksOnDate,
   deepWorkBreakdown,
   filterBlocks,
   isCurrentBlock,
-  attentionAllocation,
+  openUnscheduledTasks,
 } from '../services/statistics';
 import { courseWarnings, debtSummary, healthDrift, suggestHealth } from '../services/courseService';
 import { milestoneProgress, currentMilestone, wipStatus } from '../services/projectService';
-import { rankTasks, suggestBlocks, freeWindows, type Suggestion } from '../services/scheduler';
+import {
+  rankTasks,
+  scheduledTaskIds,
+  suggestBlocks,
+  freeWindows,
+  type Suggestion,
+} from '../services/scheduler';
 import { scheduleBlocksForDate } from '../services/scheduleService';
+import { aiConfig, deepAIConfig } from '../services/ai/config';
+import { suggestWeeklyPlan, weeklyBrief, type PlannedBlock } from '../services/ai/features';
 import {
   atTime,
   durationLabel,
@@ -46,15 +60,58 @@ import {
   todayDate,
   toISODate,
 } from '../services/timeService';
-import { handleTaskDrop } from '../services/dropActions';
+import {
+  handleBlockUnschedule,
+  handleTaskDrop,
+  handleTaskUnschedule,
+  removeBlockWithUndo,
+} from '../services/dropActions';
 
 const ALL_TYPES: BlockType[] = ['COURSE', 'DEEP_WORK', 'ENGINEERING', 'ENGLISH', 'ADMIN', 'RECOVERY'];
+
+const WEEKDAY_LABEL = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+
+/** 未来 N 天的空闲窗口（课程块 + 自建块都算占用），AI 周计划与简报共用同一口径。 */
+function collectWeekWindows(
+  today: Date,
+  courses: import('../domain/types').Course[],
+  settings: NonNullable<import('../domain/types').Settings>,
+  blocks: Block[],
+  days = 7,
+  minMinutes = 60,
+): { date: string; start: string; end: string; minutes: number }[] {
+  const out: { date: string; start: string; end: string; minutes: number }[] = [];
+  for (let i = 0; i < days; i++) {
+    const d = new Date(today.getTime() + i * 86400000);
+    const dateISO = toISODate(d);
+    const sched = scheduleBlocksForDate(d, courses, settings);
+    const dayBlocks = [...blocks.filter((b) => b.start.slice(0, 10) === dateISO), ...sched];
+    for (const w of freeWindows(atTime(dateISO, '08:00'), atTime(dateISO, '22:00'), dayBlocks, minMinutes)) {
+      out.push({
+        date: dateISO,
+        start: w.start.slice(11, 16),
+        end: w.end.slice(11, 16),
+        minutes: w.minutes,
+      });
+    }
+  }
+  return out;
+}
 
 export function Dashboard() {
   const { courses, projects, milestones, tasks, blocks, outcomes, settings } = useApp();
   const show = useToast((s) => s.show);
   const [expandedCourse, setExpandedCourse] = useState<string | null>(null);
   const [draggingTask, setDraggingTask] = useState<Task | null>(null);
+  const [tlPreview, setTlPreview] = useState<{ left: number; width: number } | null>(null);
+  const [brief, setBrief] = useState<string | null>(null);
+  const [briefBusy, setBriefBusy] = useState(false);
+  const [weekPlan, setWeekPlan] = useState<{ placement: PlannedBlock; task: Task }[] | null>(null);
+  const [planBusy, setPlanBusy] = useState(false);
+  const [planSel, setPlanSel] = useState<Set<string>>(new Set());
+  const aiCfg = aiConfig(settings);
+  // 周计划是深度规划，走深度模型档（未单独配置时回落到快速模型）
+  const deepCfg = deepAIConfig(settings);
 
   const labels = useMemo(
     () => makeLabelResolver(projects, courses),
@@ -116,6 +173,9 @@ export function Dashboard() {
   );
 
   // Scheduler suggestions (deterministic, explainable)
+  const dismissedMap = useDismissedSuggestions((st) => st.dismissed);
+  const dismissedRef = useRef(dismissedMap);
+  dismissedRef.current = dismissedMap;
   const suggestions = useMemo<Suggestion[]>(() => {
     if (!settings) return [];
     const contextMinutes: Record<string, number> = {};
@@ -124,12 +184,16 @@ export function Dashboard() {
         contextMinutes[b.context] = (contextMinutes[b.context] ?? 0) + minutesBetween(b.start, b.end);
       }
     }
-    const ranked = rankTasks(tasks, {
-      courses,
-      projects,
-      contextMinutesThisWeek: contextMinutes,
-      now: today,
-    });
+    const alreadyScheduled = scheduledTaskIds(blocks);
+    const ranked = rankTasks(
+      tasks.filter((t) => !alreadyScheduled.has(t.id)),
+      {
+        courses,
+        projects,
+        contextMinutesThisWeek: contextMinutes,
+        now: today,
+      },
+    );
     const windowList: { date: string; window: { start: string; end: string; minutes: number } }[] = [];
     // Look at next 7 days
     for (let i = 0; i < 7; i++) {
@@ -144,15 +208,39 @@ export function Dashboard() {
         windowList.push({ date: dateISO, window: w });
       }
     }
-    return suggestBlocks({
+    const suggestions = suggestBlocks({
       ranked,
       windows: windowList,
       contextLabel: (t) => t.projectId ?? t.courseId ?? labels.taskContext(t),
       maxSuggestions: 3,
     });
-  }, [tasks, courses, projects, blocks, settings, today, weekBlocks, labels]);
+    // 已忽略的建议（持久化，7 天过期）不再出现
+    return suggestions.filter((s) => !dismissedRef.current[s.task.id]);
+  }, [tasks, courses, projects, blocks, settings, today, weekBlocks, labels, dismissedMap]);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+
+  const push = useUndo((s) => s.push);
+  const dismissSuggestion = useDismissedSuggestions((st) => st.dismiss);
+
+  /** Delete a block from the UI with toast + undo support. */
+  const deleteBlock = async (block: Block) => {
+    const res = await removeBlockWithUndo(block);
+    push({ label: res.message, undo: res.undo });
+    show(`${res.message} · ⌘Z 可撤销`);
+  };
+
+  /** Close this attention block: status DONE + actual minutes. Independent of task completion. */
+  const completeBlock = async (block: Block) => {
+    const previous = { status: block.status, actualMinutes: block.actualMinutes };
+    const actual = minutesBetween(block.start, block.end);
+    await repos.blockRepo.update(block.id, { status: 'DONE', actualMinutes: actual });
+    push({
+      label: '完成时间块',
+      undo: () => repos.blockRepo.update(block.id, previous),
+    });
+    show(`时间块已完成 · 实际 ${durationLabel(actual)} · ⌘Z 可撤销`);
+  };
 
   const onDragStart = (e: DragStartEvent) => {
     const id = String(e.active.id);
@@ -161,24 +249,95 @@ export function Dashboard() {
     }
   };
 
+  // 时间轴落点计算：横坐标百分比 → 时刻，长度 = 任务预估（截到空闲窗口末尾）
+  const computeSlot = (overRect: DOMRect, clientX: number, estimateMinutes: number) => {
+    const pct = Math.min(1, Math.max(0, (clientX - overRect.left) / overRect.width));
+    const dropMin = 8 * 60 + Math.round(pct * (22 * 60 - 8 * 60));
+    const hh = String(Math.floor(dropMin / 60)).padStart(2, '0');
+    const mm = String(dropMin % 60).padStart(2, '0');
+    const dropAt = atTime(todayISO, `${hh}:${mm}`);
+    const win = todayFree.find((w) => w.start <= dropAt && dropAt < w.end);
+    if (!win) return null;
+    const avail = minutesBetween(dropAt, win.end);
+    const minutes = Math.min(estimateMinutes || 90, Math.max(15, avail));
+    const left = ((dropMin - 8 * 60) / (22 * 60 - 8 * 60)) * 100;
+    return { start: dropAt, minutes, left, width: (minutes / (22 * 60 - 8 * 60)) * 100 };
+  };
+
+  // 悬停时间轴时显示落点预览影子
+  const onDragOver = (e: DragOverEvent) => {
+    const data = e.active.data.current;
+    const overData = e.over?.data.current;
+    if (!data || data.kind !== 'task' || overData?.kind !== 'timeline' || !e.over) {
+      setTlPreview(null);
+      return;
+    }
+    const translated = e.active.rect.current.translated;
+    if (!translated) return;
+    const task = taskById.get(String(e.active.id).slice(5));
+    const slot = computeSlot(
+      e.over.rect as DOMRect,
+      translated.left + translated.width / 2,
+      task?.estimateMinutes ?? 90,
+    );
+    setTlPreview(slot ? { left: slot.left, width: slot.width } : null);
+  };
+
   const onDragEnd = async (e: DragEndEvent) => {
     setDraggingTask(null);
+    setTlPreview(null);
     const { active, over } = e;
     if (!over || !settings) return;
     const data = active.data.current;
-    if (!data || data.kind !== 'task') return;
-    const task = taskById.get(data.taskId);
-    if (!task) return;
+    if (!data) return;
     const overData = over.data.current;
     if (!overData) return;
 
     try {
+      if (data.kind === 'block' && overData.kind === 'backlog') {
+        const block = blocks.find((b) => b.id === data.blockId);
+        if (block) {
+          const res = await handleBlockUnschedule(block);
+          show(res.message);
+          if (res.undo) push({ label: res.message, undo: res.undo });
+        }
+        return;
+      }
+      if (data.kind !== 'task') return;
+      const task = taskById.get(data.taskId);
+      if (!task) return;
+
       if (overData.kind === 'block' && overData.blockId) {
         const res = await handleTaskDrop(task, { kind: 'block', blockId: overData.blockId }, { courses, settings, existingBlocks: blocks });
         show(res.message);
+        if (res.undo) push({ label: res.message, undo: res.undo });
+      } else if (overData.kind === 'timeline') {
+        const translated = active.rect.current.translated;
+        if (!translated) return;
+        const slot = computeSlot(
+          over.rect as DOMRect,
+          translated.left + translated.width / 2,
+          task.estimateMinutes,
+        );
+        if (!slot) {
+          show('落点已有安排，拖到空白处试试', 'error');
+          return;
+        }
+        const res = await handleTaskDrop(task, { kind: 'slot', start: slot.start, minutes: slot.minutes }, { courses, settings, existingBlocks: blocks });
+        show(res.message);
+        if (res.undo) push({ label: res.message, undo: res.undo });
+      } else if (overData.kind === 'window' && overData.start && overData.end) {
+        const res = await handleTaskDrop(task, { kind: 'window', start: overData.start, end: overData.end }, { courses, settings, existingBlocks: blocks });
+        show(res.message);
+        if (res.undo) push({ label: res.message, undo: res.undo });
       } else if (overData.kind === 'day' && overData.dateISO) {
         const res = await handleTaskDrop(task, { kind: 'day', dateISO: overData.dateISO }, { courses, settings, existingBlocks: blocks });
         show(res.message);
+        if (res.undo) push({ label: res.message, undo: res.undo });
+      } else if (overData.kind === 'backlog') {
+        const res = await handleTaskUnschedule(task, blocks);
+        show(res.message);
+        if (res.undo) push({ label: res.message, undo: res.undo });
       }
     } catch {
       show('操作失败，请重试', 'error');
@@ -186,15 +345,175 @@ export function Dashboard() {
   };
 
   const openTasks = useMemo(
-    () => tasks.filter((t) => t.status === 'READY' || t.status === 'DOING').slice(0, 8),
-    [tasks],
+    () => openUnscheduledTasks(tasks, blocks, 8),
+    [tasks, blocks],
   );
 
+  // 今日空闲时段（课程块 + 自建块都算占用）
+  const todayFree = useMemo(
+    () => freeWindows(atTime(todayISO, '08:00'), atTime(todayISO, '22:00'), todayAll, 30),
+    [todayAll, todayISO],
+  );
+
+  // 注意力账本：块的供给 vs 空闲（任务的完成情况不进这条账）
+  const attentionLedger = useMemo(() => {
+    const allocated = todayAll.reduce(
+      (sum, b) => sum + (b.actualMinutes ?? minutesBetween(b.start, b.end)),
+      0,
+    );
+    const free = todayFree.reduce((sum, w) => sum + w.minutes, 0);
+    const byType = new Map<BlockType, number>();
+    for (const b of todayAll) {
+      byType.set(b.type, (byType.get(b.type) ?? 0) + (b.actualMinutes ?? minutesBetween(b.start, b.end)));
+    }
+    return { allocated, free, byType };
+  }, [todayAll, todayFree]);
+
+  const generateBrief = async () => {
+    if (!aiCfg || !settings) return;
+    setBriefBusy(true);
+    try {
+      // 与 suggestions 相同口径统计未来 7 天空闲窗口总时长
+      let freeMinutes = 0;
+      for (let i = 0; i < 7; i++) {
+        const d = new Date(today.getTime() + i * 86400000);
+        const dateISO = toISODate(d);
+        const sched = scheduleBlocksForDate(d, courses, settings);
+        const dayBlocks = [
+          ...blocks.filter((b) => b.start.slice(0, 10) === dateISO),
+          ...sched,
+        ];
+        for (const w of freeWindows(atTime(dateISO, '08:00'), atTime(dateISO, '22:00'), dayBlocks, 60)) {
+          freeMinutes += w.minutes;
+        }
+      }
+      const text = await weeklyBrief(aiCfg, {
+        weekLabel: `第 ${String(week.weekNumber).padStart(2, '0')} 周`,
+        suggestions: suggestions.map((s) => ({
+          taskTitle: s.task.title,
+          when: `${s.blockStart.slice(5, 10)} ${s.blockStart.slice(11, 16)}–${s.blockEnd.slice(11, 16)}`,
+          context: labels.contextLabel(s.context) ?? undefined,
+          reasons: s.reasons,
+        })),
+        outcomes: weekOutcomes.map((o) => ({
+          title: o.title,
+          status: o.status === 'DONE' ? '已完成' : '进行中',
+        })),
+        warnings: warnings.map((w) => w.message),
+        deepWorkMinutes: deepWork.totalMinutes,
+        openTaskCount: tasks.filter((t) => t.status === 'READY' || t.status === 'DOING').length,
+        freeHours: Math.round(freeMinutes / 60),
+      });
+      setBrief(text);
+    } catch (e) {
+      show(`AI 简报生成失败：${(e as Error).message}`, 'error');
+    } finally {
+      setBriefBusy(false);
+    }
+  };
+
+  const generateWeekPlan = async () => {
+    if (!deepCfg || !settings) return;
+    setPlanBusy(true);
+    try {
+      // 待排任务先用确定性排序取前 12，编号 T1… 交给 AI 引用
+      const unscheduled = openUnscheduledTasks(tasks, blocks);
+      const ranked = rankTasks(unscheduled, {
+        courses,
+        projects,
+        contextMinutesThisWeek: {},
+        now: today,
+      }).slice(0, 12);
+      if (ranked.length === 0) {
+        show('没有待排任务，先去任务页创建几个');
+        return;
+      }
+      const placements = await suggestWeeklyPlan(deepCfg, {
+        weekLabel: `第 ${String(week.weekNumber).padStart(2, '0')} 周`,
+        tasks: ranked.map((r, i) => ({
+          key: `T${i + 1}`,
+          title: r.task.title,
+          estimateMinutes: r.task.estimateMinutes || settings.defaultTaskEstimate,
+          priority: r.task.priority,
+          dueInDays: r.task.dueDate
+            ? Math.round(
+                (new Date(r.task.dueDate + 'T00:00:00').getTime() -
+                  new Date(todayISO + 'T00:00:00').getTime()) /
+                  86400000,
+              )
+            : null,
+          context: labels.taskContext(r.task) ?? undefined,
+        })),
+        windows: collectWeekWindows(today, courses, settings, blocks),
+        projects: activeProjects.map((p) => {
+          const done = milestones.filter((m) => m.projectId === p.id && m.status === 'DONE').length;
+          return `${p.name}（里程碑 ${done} 个已完成）`;
+        }),
+        courseHints: courses.map(
+          (c) => `${c.name}[${HEALTH_LABELS[c.health]}]，债务：${debtSummary(c.debt)}`,
+        ),
+        warnings: warnings.map((w) => w.message),
+      });
+      const rows = placements
+        .map((placement) => {
+          const idx = Number(placement.taskId.slice(1)) - 1;
+          const rankedTask = ranked[idx];
+          return rankedTask ? { placement, task: rankedTask.task } : null;
+        })
+        .filter((r): r is { placement: PlannedBlock; task: Task } => r !== null);
+      if (rows.length === 0) {
+        show('AI 的排期没有匹配到任何任务，请重试', 'error');
+        return;
+      }
+      setWeekPlan(rows);
+      setPlanSel(new Set(rows.map((_, i) => String(i))));
+    } catch (e) {
+      show(`AI 周计划生成失败：${(e as Error).message}`, 'error');
+    } finally {
+      setPlanBusy(false);
+    }
+  };
+
+  const adoptPlan = async () => {
+    if (!weekPlan || !settings) return;
+    const picked = weekPlan.filter((_, i) => planSel.has(String(i)));
+    if (picked.length === 0) return;
+    const createdIds: string[] = [];
+    try {
+      for (const { placement, task } of picked) {
+        const block = await repos.blockRepo.create({
+          start: atTime(placement.date, placement.start),
+          end: atTime(placement.date, placement.end),
+          type: placement.type,
+          source: 'SUGGESTED',
+          context: task.projectId ?? task.courseId ?? labels.taskContext(task),
+          taskIds: [task.id],
+          status: 'PLANNED',
+          plannedMinutes: task.estimateMinutes,
+        });
+        createdIds.push(block.id);
+      }
+    } catch (e) {
+      // 部分创建失败时回滚已建的块，避免留下半套方案
+      for (const id of createdIds) await repos.blockRepo.remove(id);
+      show(`采纳失败：${(e as Error).message}`, 'error');
+      return;
+    }
+    push({
+      label: '采纳 AI 周计划',
+      undo: async () => {
+        for (const id of createdIds) await repos.blockRepo.remove(id);
+      },
+    });
+    setWeekPlan(null);
+    show(`已按周计划创建 ${createdIds.length} 个时间块 · ⌘Z 可整体撤销`);
+  };
+
   return (
-    <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd}>
+    <DndContext sensors={sensors} onDragStart={onDragStart} onDragOver={onDragOver} onDragEnd={onDragEnd}>
       <div className="page-header">
-        <h1>Dashboard</h1>
-        <span className="sub">WEEK {String(week.weekNumber).padStart(2, '0')} · {week.startDate} → {week.endDate}</span>
+        <h1>总览</h1>
+        <span className="sub">第 {String(week.weekNumber).padStart(2, '0')} 周 · {week.startDate} → {week.endDate}</span>
       </div>
 
       {warnings.length > 0 && (
@@ -205,14 +524,31 @@ export function Dashboard() {
         </div>
       )}
 
-      <div className="dashboard-grid">
-        {/* TODAY */}
-        <section className="panel" data-testid="today-panel">
-          <h2>Today</h2>
-          {todayAll.length === 0 ? (
-            <EmptyState>今天还没有安排。把任务拖到这里，或按 B 创建 Block。</EmptyState>
-          ) : (
-            todayAll.map((b) => (
+      {/* 双列瀑布流：左右两列各自向上堆，无空洞；今日安排与待排任务保持并排相邻 */}
+      <div className="dash-cols">
+        {/* ── 左列 ── */}
+        <div>
+          <section className="panel" data-testid="today-panel" style={{ marginBottom: 14 }}>
+            <h2>今日安排</h2>
+            {/* 注意力账本：块是主角，先回答"今天的注意力给了谁、还剩多少" */}
+            <div className="ledger">
+              <span>已分配 <strong className="mono">{durationLabel(attentionLedger.allocated)}</strong></span>
+              <span>空闲 <strong className="mono">{durationLabel(attentionLedger.free)}</strong></span>
+              {[...attentionLedger.byType.entries()]
+                .filter(([, mins]) => mins > 0)
+                .sort((a, b) => b[1] - a[1])
+                .map(([type, mins]) => (
+                  <span key={type} className="mono small muted">
+                    {BLOCK_TYPE_LABELS[type]} {durationLabel(mins)}
+                  </span>
+                ))}
+            </div>
+            {/* 一天全景长条：灰=固定课程，彩=你的块，空白=空闲，红线=现在；可直接拖任务上轴开块 */}
+            <DayTimeline blocks={todayAll} now={today} labelFor={(c) => labels.contextLabel(c)} interactive preview={tlPreview} />
+            {todayAll.length === 0 && (
+              <EmptyState>今天还没有安排。把右边的任务拖到时间轴上，或按 B 创建时间块。</EmptyState>
+            )}
+            {todayAll.map((b) => (
               <BlockCard
                 key={b.id}
                 block={b}
@@ -220,207 +556,324 @@ export function Dashboard() {
                 tasks={b.taskIds.map((id) => taskById.get(id)).filter((t): t is Task => !!t)}
                 current={isCurrentBlock(b, today)}
                 droppable
+                draggable={b.source !== 'SCHEDULE'}
+                onDelete={deleteBlock}
+                onComplete={completeBlock}
               />
-            ))
-          )}
-        </section>
-
-        {/* THIS WEEK */}
-        <section className="panel">
-          <h2>This Week</h2>
-          {ALL_TYPES.map((type) => {
-            const mins = weekMinutesByType.get(type) ?? 0;
-            return (
-              <div key={type} style={{ marginBottom: 6 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span className="mono small muted">{BLOCK_TYPE_LABELS[type]}</span>
-                  <span className="mono small faint">{durationLabel(mins)}</span>
-                </div>
-                <Bar percent={(mins / maxWeekMinutes) * 100} />
-              </div>
-            );
-          })}
-          <div className="faint small" style={{ marginTop: 10 }}>
-            Deep Work This Week
-            <span className="mono" style={{ marginLeft: 8, fontSize: 15, color: 'var(--text)' }}>
-              {durationLabel(deepWork.totalMinutes)}
-            </span>
-          </div>
-          {Object.entries(deepWork.byContext)
-            .sort((a, b) => b[1] - a[1])
-            .map(([ctx, mins]) => (
-              <div key={ctx} className="mono small muted" style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span>{labels.contextLabel(ctx)}</span>
-                <span>{durationLabel(mins)}</span>
-              </div>
             ))}
-        </section>
+            <div className="faint small" style={{ marginTop: 6 }}>
+              拖任务到时间轴的空白处，即从那个时刻开一个块
+            </div>
+          </section>
 
-        {/* COURSE HEALTH */}
-        <section className="panel">
-          <h2>Course Health</h2>
-          {courses.map((c) => {
-            const suggested = suggestHealth(c.debt);
-            const expanded = expandedCourse === c.id;
-            return (
-              <div key={c.id}>
-                <button
-                  className="btn subtle small"
-                  style={{ width: '100%', textAlign: 'left', marginBottom: 4, display: 'flex', justifyContent: 'space-between' }}
-                  onClick={() => setExpandedCourse(expanded ? null : c.id)}
-                  aria-expanded={expanded}
-                >
-                  <span>
-                    <HealthDot health={c.health} />
-                    {c.name}
-                  </span>
-                  <span className="mono faint small">
-                    {c.health}
-                    {suggested !== c.health ? ` (建议 ${suggested})` : ''}
-                    {expanded ? <ChevronDown size={12} style={{ marginLeft: 6, verticalAlign: -2 }} /> : <ChevronRight size={12} style={{ marginLeft: 6, verticalAlign: -2 }} />}
-                  </span>
-                </button>
-                {expanded && (
-                  <div className="small muted" style={{ padding: '2px 10px 8px' }}>
-                    <div className="mono">Understanding Debt: {c.debt.understanding}</div>
-                    <div className="mono">Assignment Debt: {c.debt.assignment}</div>
-                    <div className="mono">Review Debt: {c.debt.review}</div>
-                    <div className="mono">Exam Debt: {c.debt.exam}</div>
-                    <div className="faint" style={{ marginTop: 4 }}>{debtSummary(c.debt)}</div>
+          {/* THIS WEEK */}
+          <section className="panel" style={{ marginBottom: 14 }}>
+            <h2>本周投入</h2>
+            {ALL_TYPES.map((type) => {
+              const mins = weekMinutesByType.get(type) ?? 0;
+              return (
+                <div key={type} style={{ marginBottom: 6 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span className="mono small muted">{BLOCK_TYPE_LABELS[type]}</span>
+                    <span className="mono small faint">{durationLabel(mins)}</span>
                   </div>
-                )}
-              </div>
-            );
-          })}
-        </section>
-
-        {/* ACTIVE PROJECTS */}
-        <section className="panel">
-          <h2>Active Projects · WIP {wip.activeCount}/{wip.limit}</h2>
-          {activeProjects.length === 0 && <EmptyState>没有 Active 项目。</EmptyState>}
-          {activeProjects.map((p) => {
-            const ms = currentMilestone(p, milestones);
-            const pct = milestoneProgress(milestones.filter((m) => m.projectId === p.id));
-            return (
-              <div key={p.id} style={{ marginBottom: 10 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>{p.name}</span>
-                  <span className="mono small faint">{pct}%</span>
+                  <Bar percent={(mins / maxWeekMinutes) * 100} />
                 </div>
-                <div className="small muted">{ms ? ms.name : '—'}</div>
-                <Bar percent={pct} />
-              </div>
-            );
-          })}
-          {wip.atLimit && (
-            <div className="faint small">已有 {wip.activeCount} 个 Active Projects，新项目建议进入 Backlog。</div>
-          )}
-        </section>
-
-        {/* THIS WEEK OUTCOMES */}
-        <section className="panel">
-          <h2>This Week Outcomes</h2>
-          {weekOutcomes.length === 0 && <EmptyState>本周还没有设定 Outcomes。建议 3–5 个。</EmptyState>}
-          {weekOutcomes.map((o) => (
-            <div key={o.id} className="task-row" style={{ paddingLeft: 0 }}>
-              <button
-                className={`checkbox ${o.status === 'DONE' ? 'checked' : ''}`}
-                aria-label="完成 outcome"
-                onClick={() => repos.outcomeRepo.update(o.id, { status: o.status === 'DONE' ? 'OPEN' : 'DONE' })}
-              >
-                {o.status === 'DONE' ? '✓' : ''}
-              </button>
-              <span className="title" style={{ flex: 1 }}>{o.title}</span>
-              <span className="mono faint small">{o.linkedTaskIds.length} tasks</span>
-            </div>
-          ))}
-        </section>
-
-        {/* SUGGESTIONS */}
-        <section className="panel">
-          <h2>Suggested Next</h2>
-          {suggestions.length === 0 && (
-            <EmptyState>暂无可排建议 —— 给任务填写 estimate 后会出现在这里。</EmptyState>
-          )}
-          {suggestions.map((s) => (
-            <div key={s.task.id} className="row-item" style={{ display: 'block' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <strong className="small">{s.task.title}</strong>
-                <TypeTag type={s.type} />
-              </div>
-              <div className="mono small muted" style={{ margin: '3px 0' }}>
-                {s.blockStart.slice(5, 10)} {s.blockStart.slice(11, 16)}–{s.blockEnd.slice(11, 16)} · {labels.contextLabel(s.context)}
-              </div>
-              <ul className="faint small" style={{ margin: '2px 0 6px', paddingLeft: 16 }}>
-                {s.reasons.slice(0, 3).map((r, i) => (
-                  <li key={i}>{r}</li>
-                ))}
-              </ul>
-              <div style={{ display: 'flex', gap: 6 }}>
-                <button
-                  className="btn small primary"
-                  onClick={async () => {
-                    await repos.blockRepo.create({
-                      start: s.blockStart,
-                      end: s.blockEnd,
-                      type: s.type,
-                      source: 'SUGGESTED',
-                      context: s.context,
-                      taskIds: [s.task.id],
-                      status: 'PLANNED',
-                      plannedMinutes: s.task.estimateMinutes,
-                    });
-                    show(`已按建议创建 Block：${s.task.title}`);
-                  }}
-                >
-                  Accept
-                </button>
-                <button
-                  className="btn small subtle"
-                  onClick={() => show('已忽略该建议')}
-                >
-                  Reject
-                </button>
-              </div>
-            </div>
-          ))}
-        </section>
-
-        {/* READY TASKS (draggable) */}
-        <section className="panel">
-          <h2>Ready · 拖到 Today 或 Calendar</h2>
-          {openTasks.length === 0 && <EmptyState>没有待排任务。</EmptyState>}
-          {openTasks.map((t) => (
-            <TaskRow
-              key={t.id}
-              task={t}
-              contextLabel={labels.taskContext(t)}
-              draggable
-              onToggle={() =>
-                t.status === 'DONE'
-                  ? repos.taskRepo.reopen(t.id)
-                  : repos.taskRepo.complete(t.id)
-              }
-            />
-          ))}
-        </section>
-
-        {/* ATTENTION ALLOCATION */}
-        <section className="panel">
-          <h2>Attention Allocation</h2>
-          {allocation.length === 0 && <EmptyState>本周还没有 Block 数据。</EmptyState>}
-          {allocation.map((a) => (
-            <div key={a.type} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-              <span className="mono small muted">{BLOCK_TYPE_LABELS[a.type]}</span>
-              <span className="mono small">
-                {a.percent}% <span className="faint">({durationLabel(a.minutes)})</span>
+              );
+            })}
+            <div className="faint small" style={{ marginTop: 10 }}>
+              本周深度工作
+              <span className="mono" style={{ marginLeft: 8, fontSize: 15, color: 'var(--text)' }}>
+                {durationLabel(deepWork.totalMinutes)}
               </span>
             </div>
-          ))}
-        </section>
+            {Object.entries(deepWork.byContext)
+              .sort((a, b) => b[1] - a[1])
+              .map(([ctx, mins]) => (
+                <div key={ctx} className="mono small muted" style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>{labels.contextLabel(ctx)}</span>
+                  <span>{durationLabel(mins)}</span>
+                </div>
+              ))}
+          </section>
+
+          {/* COURSE HEALTH */}
+          <section className="panel" style={{ marginBottom: 14 }}>
+            <h2>课程健康</h2>
+            {courses.map((c) => {
+              const suggested = suggestHealth(c.debt);
+              const expanded = expandedCourse === c.id;
+              return (
+                <div key={c.id}>
+                  <button
+                    className="btn subtle small"
+                    style={{ width: '100%', textAlign: 'left', marginBottom: 4, display: 'flex', justifyContent: 'space-between' }}
+                    onClick={() => setExpandedCourse(expanded ? null : c.id)}
+                    aria-expanded={expanded}
+                  >
+                    <span>
+                      <HealthDot health={c.health} />
+                      {c.name}
+                    </span>
+                    <span className="mono faint small">
+                      {HEALTH_LABELS[c.health]}
+                      {suggested !== c.health ? `（建议 ${HEALTH_LABELS[suggested]}）` : ''}
+                      {expanded ? <ChevronDown size={12} style={{ marginLeft: 6, verticalAlign: -2 }} /> : <ChevronRight size={12} style={{ marginLeft: 6, verticalAlign: -2 }} />}
+                    </span>
+                  </button>
+                  {expanded && (
+                    <div className="small muted" style={{ padding: '2px 10px 8px' }}>
+                      <div className="mono">Understanding Debt: {c.debt.understanding}</div>
+                      <div className="mono">Assignment Debt: {c.debt.assignment}</div>
+                      <div className="mono">Review Debt: {c.debt.review}</div>
+                      <div className="mono">Exam Debt: {c.debt.exam}</div>
+                      <div className="faint" style={{ marginTop: 4 }}>{debtSummary(c.debt)}</div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </section>
+
+          {/* ACTIVE PROJECTS */}
+          <section className="panel">
+            <h2>进行中项目 · WIP {wip.activeCount}/{wip.limit}</h2>
+            {activeProjects.length === 0 && <EmptyState>没有进行中的项目。</EmptyState>}
+            {activeProjects.map((p) => {
+              const ms = currentMilestone(p, milestones);
+              const pct = milestoneProgress(milestones.filter((m) => m.projectId === p.id));
+              const own = milestones.filter((m) => m.projectId === p.id);
+              const doneCount = own.filter((m) => m.status === 'DONE').length;
+              return (
+                <div key={p.id} style={{ marginBottom: 10 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>{p.name}</span>
+                    <span className="mono small faint">{doneCount}/{own.length} · {pct}%</span>
+                  </div>
+                  <div className="small muted">{ms ? ms.name : '—'}</div>
+                  <Bar percent={pct} />
+                </div>
+              );
+            })}
+            {wip.atLimit && (
+              <div className="faint small">已有 {wip.activeCount} 个进行中项目，新项目建议进入待启动。</div>
+            )}
+          </section>
+        </div>
+
+        {/* ── 右列 ── */}
+        <div>
+          {/* READY TASKS (draggable; also the drop target to pull tasks back out of blocks) */}
+          <DropZone id="backlog-dashboard" data={{ kind: 'backlog' }} className="panel" style={{ marginBottom: 14 }}>
+            <h2>待排任务</h2>
+            {openTasks.length === 0 && (
+              <EmptyState>都排好了。把任务从时间块拖回这里可重新排期。</EmptyState>
+            )}
+            {openTasks.map((t) => (
+              <TaskRow
+                key={t.id}
+                task={t}
+                contextLabel={labels.taskContext(t)}
+                draggable
+                onToggle={() =>
+                  t.status === 'DONE'
+                    ? repos.taskRepo.reopen(t.id)
+                    : repos.taskRepo.complete(t.id)
+                }
+              />
+            ))}
+          </DropZone>
+
+          {/* THIS WEEK OUTCOMES */}
+          <section className="panel" style={{ marginBottom: 14 }}>
+            <h2>本周成果</h2>
+            {weekOutcomes.length === 0 && <EmptyState>本周还没有设定 Outcomes。建议 3–5 个。</EmptyState>}
+            {weekOutcomes.map((o) => (
+              <div key={o.id} className="task-row" style={{ paddingLeft: 0 }}>
+                <button
+                  className={`checkbox ${o.status === 'DONE' ? 'checked' : ''}`}
+                  aria-label="完成 outcome"
+                  onClick={() => repos.outcomeRepo.update(o.id, { status: o.status === 'DONE' ? 'OPEN' : 'DONE' })}
+                >
+                  {o.status === 'DONE' ? '✓' : ''}
+                </button>
+                <span className="title" style={{ flex: 1 }}>{o.title}</span>
+                <span className="mono faint small">{o.linkedTaskIds.length} 个任务</span>
+              </div>
+            ))}
+          </section>
+
+          {/* SUGGESTIONS */}
+          <section className="panel" style={{ marginBottom: 14 }}>
+            <h2>下一步建议</h2>
+            {suggestions.length === 0 && (
+              <EmptyState>暂无可排建议 —— 给任务填写预估时间后会出现在这里。</EmptyState>
+            )}
+            {suggestions.map((s) => (
+              <div key={s.task.id} className="row-item" style={{ display: 'block', marginBottom: 10 }}>
+                {/* 块是主语：建议的是"开一个什么块"，任务只是可挂项 */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <strong className="small">
+                    {BLOCK_TYPE_LABELS[s.type]}块 · {s.blockStart.slice(5, 10)} {s.blockStart.slice(11, 16)}–{s.blockEnd.slice(11, 16)}
+                  </strong>
+                  <TypeTag type={s.type} />
+                </div>
+                <div className="mono small muted" style={{ margin: '3px 0' }}>
+                  {labels.contextLabel(s.context)}
+                </div>
+                <ul className="faint small" style={{ margin: '2px 0 6px', paddingLeft: 16 }}>
+                  {s.reasons.slice(0, 3).map((r, i) => (
+                    <li key={i}>{r}</li>
+                  ))}
+                </ul>
+                <div className="small" style={{ marginBottom: 6 }}>
+                  可顺手挂上：<span className="muted">{s.task.title}</span>
+                  <span className="faint small">（{durationLabel(s.task.estimateMinutes)}）</span>
+                </div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button
+                    className="btn small primary"
+                    onClick={async () => {
+                      const block = await repos.blockRepo.create({
+                        start: s.blockStart,
+                        end: s.blockEnd,
+                        type: s.type,
+                        source: 'SUGGESTED',
+                        context: s.context,
+                        taskIds: [s.task.id],
+                        status: 'PLANNED',
+                        plannedMinutes: s.task.estimateMinutes,
+                      });
+                      push({
+                        label: '采纳建议',
+                        undo: () => repos.blockRepo.remove(block.id),
+                      });
+                      show(`已开时间块：${BLOCK_TYPE_LABELS[s.type]} ${s.blockStart.slice(11, 16)}–${s.blockEnd.slice(11, 16)} · ⌘Z 可撤销`);
+                    }}
+                  >
+                    采纳
+                  </button>
+                  <button
+                    className="btn small subtle"
+                    onClick={() => {
+                      dismissSuggestion(s.task.id);
+                      show('已忽略该建议（7 天内不再出现）');
+                    }}
+                  >
+                    忽略
+                  </button>
+                </div>
+              </div>
+            ))}
+          </section>
+
+          {/* AI WEEK PLAN */}
+          <section className="panel" style={{ marginBottom: 14 }}>
+            <h2 style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              AI 周计划
+              <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <span className="tag" title="周计划走深度模型档（设置 → AI 助手）">
+                  深度{deepCfg && aiCfg && deepCfg.model !== aiCfg.model ? `· ${deepCfg.model}` : ''}
+                </span>
+                <button
+                  className="btn small subtle"
+                  disabled={planBusy || !deepCfg}
+                  title={deepCfg ? undefined : '先在 设置 → AI 助手 里配置接口'}
+                  onClick={generateWeekPlan}
+                >
+                  {planBusy ? 'AI 思考中…' : weekPlan ? '重新生成' : '生成周计划'}
+                </button>
+              </span>
+            </h2>
+            <AIThinking active={planBusy} />
+            {!weekPlan ? (
+              <div className="faint small">
+                把未来 7 天的空闲窗口和待排任务交给 AI 做一份整体排期草稿——每条带理由，勾选后才落库。
+              </div>
+            ) : (
+              <div>
+                {weekPlan.map((row, i) => {
+                  const d = new Date(row.placement.date + 'T00:00:00');
+                  const dayLabel = `${row.placement.date.slice(5)} ${WEEKDAY_LABEL[d.getDay()]}`;
+                  return (
+                    <div key={i} style={{ marginBottom: 8 }}>
+                      <label className="task-row" style={{ paddingLeft: 0, cursor: 'pointer' }}>
+                        <input
+                          type="checkbox"
+                          checked={planSel.has(String(i))}
+                          onChange={() => {
+                            const next = new Set(planSel);
+                            if (next.has(String(i))) next.delete(String(i));
+                            else next.add(String(i));
+                            setPlanSel(next);
+                          }}
+                        />
+                        <span className="title" style={{ flex: 1 }}>
+                          <span className="mono small muted">{dayLabel} {row.placement.start}–{row.placement.end}</span>
+                          <span style={{ display: 'block' }}>{row.task.title}</span>
+                        </span>
+                        <TypeTag type={row.placement.type} />
+                      </label>
+                      {row.placement.reason && (
+                        <div className="faint small" style={{ margin: '2px 0 0 24px' }}>
+                          {row.placement.reason}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                  <button className="btn small primary" onClick={adoptPlan}>
+                    采纳所选（{planSel.size}）
+                  </button>
+                  <button className="btn small subtle" onClick={() => setWeekPlan(null)}>
+                    收起
+                  </button>
+                </div>
+              </div>
+            )}
+          </section>
+
+          {/* AI BRIEF */}
+          <section className="panel" style={{ marginBottom: 14 }}>
+            <h2 style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              AI 简报
+              <button
+                className="btn small subtle"
+                disabled={briefBusy || !aiCfg}
+                title={aiCfg ? undefined : '先在 设置 → AI 助手 里配置接口'}
+                onClick={generateBrief}
+              >
+                {briefBusy ? 'AI 思考中…' : brief ? '重新生成' : '生成本周简报'}
+              </button>
+            </h2>
+            <AIThinking active={briefBusy} />
+            {brief ? (
+              <p className="small" style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{brief}</p>
+            ) : (
+              <div className="faint small">
+                把下周排课建议和空闲窗口汇总成一段话，帮你决定注意力往哪放。
+              </div>
+            )}
+          </section>
+
+          {/* ATTENTION ALLOCATION */}
+          <section className="panel">
+            <h2>注意力分配</h2>
+            {allocation.length === 0 && <EmptyState>本周还没有 Block 数据。</EmptyState>}
+            {allocation.map((a) => (
+              <div key={a.type} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                <span className="mono small muted">{BLOCK_TYPE_LABELS[a.type]}</span>
+                <span className="mono small">
+                  {a.percent}% <span className="faint">({durationLabel(a.minutes)})</span>
+                </span>
+              </div>
+            ))}
+          </section>
+        </div>
       </div>
 
-      <DragOverlay>
+      <DragOverlay dropAnimation={null}>
         {draggingTask ? (
           <div className="tag" style={{ padding: '4px 10px' }}>
             {draggingTask.title}

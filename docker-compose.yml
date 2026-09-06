@@ -1,0 +1,57 @@
+# Semester OS 通用化部署：一条命令起本地优先的静态应用。
+#   docker compose up -d                # 仅 Semester OS（http://localhost:8080）
+#   docker compose --profile planka up -d  # 额外附带可选的 Planka 执行层
+#
+# 说明：VITE_* 是构建期变量。要启用 Planka 集成，请在 .env 里设置后
+# `docker compose up -d --build`；不配置时应用照常完整运行（纯本地模式）。
+services:
+  app:
+    build:
+      context: .
+      args:
+        VITE_PLANKA_URL: ${VITE_PLANKA_URL:-}
+        VITE_PLANKA_TOKEN: ${VITE_PLANKA_TOKEN:-}
+        VITE_PLANKA_BOARD_ID: ${VITE_PLANKA_BOARD_ID:-}
+        VITE_PLANKA_LIST_ID: ${VITE_PLANKA_LIST_ID:-}
+    ports:
+      - "8080:80"
+    restart: unless-stopped
+
+  # ── 可选：Planka 执行层（默认不启动）────────────────────────────
+  # 起来后在应用「设置 → 集成」里把地址填为 http://localhost:1337，
+  # 注册账号后于个人设置生成 API 令牌。
+  planka:
+    image: ghcr.io/plankanban/planka:2.x
+    profiles: ["planka"]
+    depends_on:
+      planka-db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://planka:${PLANKA_DB_PASSWORD:-planka-secret}@planka-db/planka
+      SECRET_KEY: ${PLANKA_SECRET_KEY:-change-me-in-production}
+      TRUST_PROXY: "1"
+    ports:
+      - "1337:1337"
+    volumes:
+      - planka_attachments:/app/public/attachments
+    restart: unless-stopped
+
+  planka-db:
+    image: postgres:16-alpine
+    profiles: ["planka"]
+    environment:
+      POSTGRES_USER: planka
+      POSTGRES_PASSWORD: ${PLANKA_DB_PASSWORD:-planka-secret}
+      POSTGRES_DB: planka
+    volumes:
+      - planka_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U planka"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  planka_attachments:
+  planka_db_data:

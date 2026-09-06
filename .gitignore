@@ -12,6 +12,13 @@ dist
 dist-ssr
 *.local
 
+# Local env files (Planka tokens etc.) — never commit secrets
+.env
+.env.*
+
+# GUI 测试产物（本地验证截图）
+gui-test-screenshots/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

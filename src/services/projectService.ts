@@ -1,10 +1,12 @@
 import type { Milestone, Project, Task } from '../domain/types';
 
+/**
+ * 进度规则（用户指定）：每完成一个里程碑，进度固定 +1%。
+ * 里程碑总数不影响单步大小；上限 100。
+ */
 export function milestoneProgress(milestones: Milestone[]): number {
-  if (milestones.length === 0) return 0;
   const done = milestones.filter((m) => m.status === 'DONE').length;
-  const doing = milestones.filter((m) => m.status === 'DOING').length;
-  return Math.round(((done + doing * 0.5) / milestones.length) * 100);
+  return Math.min(100, done);
 }
 
 export function currentMilestone(

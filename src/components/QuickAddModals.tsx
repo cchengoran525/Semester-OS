@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import {
+  BLOCK_TYPE_LABELS,
   ESTIMATES_ALLOWED,
+  PRIORITY_LABELS,
   type BlockType,
   type Priority,
   type ProjectStatus,
@@ -88,9 +90,9 @@ function TaskModal() {
   };
 
   return (
-    <Modal title="新建 Task" onClose={close}>
+    <Modal title="新建任务" onClose={close}>
       <label className="field">
-        <span>TITLE</span>
+        <span>标题</span>
         <input
           autoFocus
           value={title}
@@ -101,7 +103,7 @@ function TaskModal() {
       </label>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
         <label className="field">
-          <span>PROJECT</span>
+          <span>项目</span>
           <select value={projectId} onChange={(e) => { setProjectId(e.target.value); if (e.target.value) setCourseId(''); }}>
             <option value="">—</option>
             {projects.map((p) => (
@@ -112,7 +114,7 @@ function TaskModal() {
           </select>
         </label>
         <label className="field">
-          <span>COURSE</span>
+          <span>课程</span>
           <select value={courseId} onChange={(e) => { setCourseId(e.target.value); if (e.target.value) setProjectId(''); }}>
             <option value="">—</option>
             {courses.map((c) => (
@@ -123,25 +125,27 @@ function TaskModal() {
           </select>
         </label>
         <label className="field">
-          <span>ESTIMATE</span>
+          <span>预估用时</span>
           <select value={estimate} onChange={(e) => setEstimate(Number(e.target.value))}>
             {ESTIMATES_ALLOWED.map((m) => (
               <option key={m} value={m}>
-                {m} min
+                {m} 分钟
               </option>
             ))}
           </select>
         </label>
         <label className="field">
-          <span>PRIORITY</span>
+          <span>优先级</span>
           <select value={priority} onChange={(e) => setPriority(e.target.value as Priority)}>
-            <option value="HIGH">HIGH</option>
-            <option value="MEDIUM">MEDIUM</option>
-            <option value="LOW">LOW</option>
+            {(['HIGH', 'MEDIUM', 'LOW'] as Priority[]).map((p) => (
+              <option key={p} value={p}>
+                {PRIORITY_LABELS[p]}
+              </option>
+            ))}
           </select>
         </label>
         <label className="field" style={{ gridColumn: '1 / -1' }}>
-          <span>DUE (可选)</span>
+          <span>截止日期（可选）</span>
           <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
         </label>
       </div>
@@ -199,32 +203,32 @@ function BlockModal() {
   };
 
   return (
-    <Modal title="新建 Block" onClose={close}>
+    <Modal title="新建时间块" onClose={close}>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
         <label className="field">
-          <span>DATE</span>
+          <span>日期</span>
           <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
         </label>
         <label className="field">
-          <span>START</span>
+          <span>开始</span>
           <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
         </label>
         <label className="field">
-          <span>END</span>
+          <span>结束</span>
           <input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} />
         </label>
         <label className="field">
-          <span>TYPE</span>
+          <span>类型</span>
           <select value={type} onChange={(e) => setType(e.target.value as BlockType)}>
             {BLOCK_TYPES.map((t) => (
               <option key={t} value={t}>
-                {t}
+                {BLOCK_TYPE_LABELS[t]}
               </option>
             ))}
           </select>
         </label>
         <label className="field">
-          <span>CONTEXT</span>
+          <span>关联内容</span>
           <select value={context} onChange={(e) => setContext(e.target.value)}>
             <option value="">—</option>
             {projects.map((p) => (
@@ -240,7 +244,7 @@ function BlockModal() {
           </select>
         </label>
         <label className="field">
-          <span>ENERGY (1–5)</span>
+          <span>精力 (1–5)</span>
           <select value={energy} onChange={(e) => setEnergy(Number(e.target.value))}>
             {[1, 2, 3, 4, 5].map((n) => (
               <option key={n} value={n}>
@@ -251,11 +255,11 @@ function BlockModal() {
         </label>
       </div>
       <label className="field">
-        <span>关联 TASKS（可选）</span>
-        <div style={{ maxHeight: 140, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 5, padding: 4 }}>
-          {openTasks.length === 0 && <span className="faint small">暂无 READY 任务</span>}
+        <span>关联任务（可选）</span>
+        <div style={{ maxHeight: 160, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 5, padding: 4 }}>
+          {openTasks.length === 0 && <span className="faint small">暂无待办任务</span>}
           {openTasks.map((t) => (
-            <label key={t.id} className="small" style={{ display: 'flex', gap: 6, alignItems: 'center', padding: '2px 0' }}>
+            <label key={t.id} className="small modal-task-row">
               <input
                 type="checkbox"
                 checked={taskIds.includes(t.id)}
@@ -263,8 +267,8 @@ function BlockModal() {
                   setTaskIds(e.target.checked ? [...taskIds, t.id] : taskIds.filter((x) => x !== t.id))
                 }
               />
-              {t.title}
-              <span className="faint">
+              <span className="modal-task-title">{t.title}</span>
+              <span className="faint modal-task-context">
                 {t.projectId ? projectById.get(t.projectId)?.name : courseById.get(t.courseId ?? '')?.name ?? ''}
               </span>
             </label>
@@ -288,7 +292,7 @@ function ProjectModal() {
   const wip = wipStatus(projects, settings?.wipLimit ?? 2);
   const hint =
     status === 'ACTIVE' && wip.atLimit
-      ? `已有 ${wip.activeCount} 个 Active Projects（WIP ${wip.activeCount}/${wip.limit}），建议新项目进入 Backlog。`
+      ? `已有 ${wip.activeCount} 个进行中项目（WIP ${wip.activeCount}/${wip.limit}），建议新项目进入待启动。`
       : null;
 
   const save = async () => {
@@ -307,31 +311,31 @@ function ProjectModal() {
   };
 
   return (
-    <Modal title="新建 Project" onClose={close}>
+    <Modal title="新建项目" onClose={close}>
       <label className="field">
-        <span>NAME</span>
+        <span>名称</span>
         <input autoFocus value={name} onChange={(e) => setName(e.target.value)} />
       </label>
       <label className="field">
-        <span>DESCRIPTION</span>
+        <span>描述</span>
         <textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />
       </label>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
         <label className="field">
-          <span>STATUS</span>
+          <span>状态</span>
           <select value={status} onChange={(e) => setStatus(e.target.value as ProjectStatus)}>
-            <option value="BACKLOG">BACKLOG</option>
-            <option value="ACTIVE">ACTIVE</option>
-            <option value="PAUSED">PAUSED</option>
-            <option value="DONE">DONE</option>
+            <option value="BACKLOG">待启动</option>
+            <option value="ACTIVE">进行中</option>
+            <option value="PAUSED">已暂停</option>
+            <option value="DONE">已完成</option>
           </select>
         </label>
         <label className="field">
-          <span>PRIORITY</span>
+          <span>优先级</span>
           <select value={priority} onChange={(e) => setPriority(e.target.value as Priority)}>
-            <option value="HIGH">HIGH</option>
-            <option value="MEDIUM">MEDIUM</option>
-            <option value="LOW">LOW</option>
+            <option value="HIGH">高</option>
+            <option value="MEDIUM">中</option>
+            <option value="LOW">低</option>
           </select>
         </label>
       </div>
@@ -369,18 +373,18 @@ function CourseModal() {
   };
 
   return (
-    <Modal title="新建 Course" onClose={close}>
+    <Modal title="新建课程" onClose={close}>
       <label className="field">
-        <span>NAME</span>
+        <span>名称</span>
         <input autoFocus value={name} onChange={(e) => setName(e.target.value)} />
       </label>
       <label className="field">
-        <span>TEACHER (可选)</span>
+        <span>教师（可选）</span>
         <input value={teacher} onChange={(e) => setTeacher(e.target.value)} />
       </label>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 10 }}>
         <label className="field">
-          <span>WEEKDAY</span>
+          <span>星期</span>
           <select value={weekday} onChange={(e) => setWeekday(Number(e.target.value))}>
             {WEEKDAYS.map((d, i) => (
               <option key={i} value={i + 1}>
@@ -390,15 +394,15 @@ function CourseModal() {
           </select>
         </label>
         <label className="field">
-          <span>START</span>
+          <span>开始</span>
           <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
         </label>
         <label className="field">
-          <span>END</span>
+          <span>结束</span>
           <input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} />
         </label>
         <label className="field">
-          <span>RECURRENCE</span>
+          <span>重复</span>
           <select value={recurrence} onChange={(e) => setRecurrence(e.target.value as Recurrence)}>
             <option value="WEEKLY">每周</option>
             <option value="ODD_WEEK">单周</option>

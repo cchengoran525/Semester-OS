@@ -54,6 +54,33 @@ npm run dev      # http://localhost:5173
 
 首次打开会自动录入 seed 数据（真实课程表 + 6 个项目），之后不会再覆盖你的数据。
 
+## Deployment（通用化部署）
+
+应用是纯静态产物（`dist/`），可托管到任何静态服务器 / CDN。产物内使用
+HashRouter 与相对化的资源引用，无需服务端路由配置；数据全部在浏览器
+IndexedDB，服务端不需要数据库。
+
+**方式一：Docker（推荐）**
+
+```bash
+docker compose up -d --build            # http://localhost:8080
+docker compose --profile planka up -d --build   # 连同可选的 Planka 一起部署
+```
+
+- 多阶段构建：Node 构建产物由 nginx 提供服务，`/healthz` 健康检查
+- `VITE_PLANKA_*` 为构建期变量：在 `.env` 配置后 `--build` 重建即可启用集成
+- 构建产物 `/assets/` 永久缓存、`index.html` 不缓存，发新版立即生效
+
+**方式二：任意静态托管**
+
+```bash
+npm run build
+# dist/ 上传到 nginx / Caddy / Vercel / GitHub Pages 等
+VITE_BASE=/semester-os/ npm run build   # 子路径托管时加 base 前缀
+```
+
+本地预览生产产物：`npm run preview`。
+
 ## Build / Test
 
 ```bash
@@ -78,15 +105,73 @@ Settings → Data → Export JSON / Import JSON。导入会先解析校验（sch
 复制 `.env.example` 为 `.env`（可选，仅 Planka 集成需要；不配置不影响任何功能）：
 
 ```
+# Planka 地址，如 https://planka.example.com（结尾不带斜杠）
 VITE_PLANKA_URL=
+# API 令牌：Planka → 个人设置 → API 令牌
 VITE_PLANKA_TOKEN=
+# 要同步的看板 ID（拉取/推送需要；仅测试连接可不填）
+VITE_PLANKA_BOARD_ID=
+# 推送任务的目标列表 ID（不填默认用看板第一个列表）
+VITE_PLANKA_LIST_ID=
 ```
+
+修改环境变量后需重启开发服务器（`npm run dev`）。
 
 ## Planka Integration
 
-Planka 定位为 Execution Layer。当前 MVP 显示 Not Connected，
-`storage/repositories.ts` 的 Repository 抽象即为未来 `PlankaAdapter` 的接缝
-（createTask / updateTask / completeTask / fetchTasks 一一对应）。
+Planka 定位为 Execution Layer（执行层），实现在 `src/services/planka/`：
+
+- `config.ts`   读取环境变量，缺 URL/TOKEN 时集成自动停用
+- `client.ts`   精简的 Planka REST 客户端（Bearer 认证，boards/cards 端点，
+  兼容 Planka 1.x 内联结构与 2.x 的 `items` 包装），`probe()` 三态探测：
+  `ok` / `reachable`（令牌或路径有误）/ `unreachable`（网络不通）
+- `adapter.ts`  `PlankaAdapter` 实现 `ExecutionLayer` 接口（fetchTasks /
+  createTask / updateTask / completeTask / removeTask），字段映射：
+  Task.title ↔ card.name、Task.notes ↔ card.description、DONE ↔ isCompleted；
+  预估/优先级/排期保留在本地（Planka 无对应概念）
+- `sync.ts`     手动同步：`pullCardsAsTasks`（按标题去重导入）、
+  `pushTaskAsCard`（推送单个任务）
+
+入口在 设置 → 集成：测试连接 / 从 Planka 拉取卡片 / 推送待办任务。
+同步是手动触发的，不会自动改动本地数据，符合"系统只建议、用户决定"原则。
+`storage/repositories.ts` 的 Repository 抽象仍是接缝，未来换其他执行工具
+（如 Wekan、Todoist）只需替换 adapter 实现，UI 与存储层不动。
+
+## AI Assistant（AI 助手）
+
+AI 集成在 `src/services/ai/`，走 **OpenAI 兼容协议**（`/chat/completions`），
+不绑定任何厂商——智谱 GLM、DeepSeek、Kimi、SiliconFlow、OpenRouter 等均可。
+支持**双模型档位**：
+
+- **快速模型**（必填）：简报 / 复盘起草 / 任务拆解，低思考档（`reasoning_effort: low`），
+  秒级响应
+- **深度模型**（可选，逐字段回落到快速模型）：AI 周计划等需要全局取舍的深度
+  规划，高思考档。可以只填一个更强的模型名，Key / 地址自动沿用快速模型
+
+各能力配置：
+
+- `config.ts`   读取设置页配置（Base URL / API Key / 模型名 + 可选深度档），
+  未配置即停用；`deepAIConfig()` 做逐字段回落解析
+- `client.ts`   兼容客户端（Bearer 认证），`probe()` 三态探测，`extractJSON()`
+  剥围栏解析；180s 超时；服务不支持 `response_format` / `reasoning_effort`
+  时自动降级重试；content 为空时兜底取推理模型的 `reasoning_content`
+- `prompts.ts`  提示词调教：把「只建议不修改、注意力经济、不制造焦虑」的产品
+  哲学写进 system prompt，每个能力单独约束输出 JSON 格式
+- `features.ts` 四个能力：任务拆解 / 周复盘起草 / 周简报 / 一键周计划，输出经
+  白名单校验与夹取（预估就近取 15–180 分钟档、优先级回落 MEDIUM、丢弃无效条目、
+  排期裁剪进空闲窗口并去重叠）才进 UI
+
+三个功能入口（均需先在 设置 → AI 助手 配置，Key 只存本地 IndexedDB）：
+
+- 项目卡片展开 → **AI 拆解任务**：生成建议子任务，勾选后导入为「待定」任务
+- 每周复盘 → **AI 起草**：基于本周真实数据起草五个复盘问题，AI 只填草稿，
+  用户核对修改后才保存
+- 总览 → **AI 周计划**：未来 7 天空闲窗口 + 待排任务整体排期，每条带理由，
+  勾选采纳后创建 SUGGESTED 时间块（支持 ⌘Z 整体撤销）
+- 总览 → **AI 简报**：把下周排课建议、空闲窗口、风险汇总成一段话
+
+AI 只在用户点击时把当次所需的摘要数据发给所配置的服务，任何输出都不会
+自动修改本地数据。
 
 ## Keyboard
 
