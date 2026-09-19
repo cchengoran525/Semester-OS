@@ -103,6 +103,9 @@ export function TaskRow({
   return (
     <div
       ref={drag.setNodeRef}
+      onClick={() => {
+        onClick?.();
+      }}
       className={`task-row ${task.status === 'DONE' ? 'done' : ''} ${draggable ? 'draggable' : ''} ${drag.isDragging ? 'dragging' : ''}`}
       {...(draggable ? drag.listeners : {})}
       {...(draggable ? drag.attributes : {})}
@@ -120,7 +123,6 @@ export function TaskRow({
       </button>
       <span
         className="title"
-        onClick={onClick}
         style={{ cursor: onClick ? 'pointer' : 'default' }}
       >
         <span className="task-title-main">{task.title}</span>
@@ -143,7 +145,7 @@ export function TaskRow({
   );
 }
 
-/** Deterministic hue from a context label so AS / SC / 电路基础 get stable colors. */
+/** Deterministic hue from a context label so different contexts get stable colors. */
 function contextHue(label: string): number {
   let h = 0;
   for (let i = 0; i < label.length; i++) h = (h * 31 + label.charCodeAt(i)) % 360;
@@ -267,6 +269,7 @@ export function BlockCard({
   draggable,
   onDelete,
   onComplete,
+  onTaskOpen,
 }: {
   block: Block;
   label?: string;
@@ -279,6 +282,8 @@ export function BlockCard({
   onDelete?: (block: Block) => void | Promise<void>;
   /** Present → shows a ✓ button that closes this attention block (records actual minutes). */
   onComplete?: (block: Block) => void | Promise<void>;
+  /** Present → 块里的任务行可点击打开任务详情 */
+  onTaskOpen?: (task: Task) => void;
 }) {
   const drop = useDroppable({
     id: `block-${block.id}`,
@@ -357,7 +362,7 @@ export function BlockCard({
       {tasks.length > 0 && (
         <ul>
           {tasks.map((t) => (
-            <BlockTaskItem key={t.id} task={t} />
+            <BlockTaskItem key={t.id} task={t} onOpen={onTaskOpen} />
           ))}
         </ul>
       )}
@@ -421,7 +426,13 @@ export function DropZone({
 }
 
 /** A task line inside a block card — checkbox completes it, title drags it back out. */
-function BlockTaskItem({ task }: { task: Task }) {
+function BlockTaskItem({
+  task,
+  onOpen,
+}: {
+  task: Task;
+  onOpen?: (task: Task) => void;
+}) {
   const { setNodeRef, listeners, attributes, isDragging } = useDraggable({
     id: `task-${task.id}`,
     data: { kind: 'task', taskId: task.id },
@@ -431,8 +442,9 @@ function BlockTaskItem({ task }: { task: Task }) {
       ref={setNodeRef}
       {...attributes}
       {...listeners}
+      onClick={onOpen ? () => onOpen(task) : undefined}
       className={`block-task-item ${isDragging ? 'dragging' : ''}`}
-      title="拖动可移回待排"
+      title={onOpen ? '点击查看详情，拖动可移回待排' : '拖动可移回待排'}
     >
       <button
         className={`checkbox ${task.status === 'DONE' ? 'checked' : ''}`}
@@ -446,7 +458,18 @@ function BlockTaskItem({ task }: { task: Task }) {
       >
         {task.status === 'DONE' ? '✓' : ''}
       </button>
-      <span className={`block-task-title ${task.status === 'DONE' ? 'done' : ''}`}>{task.title}</span>
+      <span
+        className={`block-task-title ${task.status === 'DONE' ? 'done' : ''}`}
+        style={{ cursor: onOpen ? 'pointer' : 'grab' }}
+        title={onOpen ? '点击查看详情，拖动可移回待排' : '拖动可移回待排'}
+        onClick={(e) => {
+          if (!onOpen) return;
+          e.stopPropagation();
+          onOpen(task);
+        }}
+      >
+        {task.title}
+      </span>
     </li>
   );
 }

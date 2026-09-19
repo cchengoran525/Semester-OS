@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { addDays, differenceInCalendarDays, parse } from 'date-fns';
 import { useApp } from '../components/AppProvider';
 import { Bar } from '../components/common';
@@ -11,6 +11,25 @@ import { ISO_DATE, todayDate, toISODate } from '../services/timeService';
 export function SemesterPage() {
   const { courses, projects, milestones, settings, tasks, blocks } = useApp();
   const show = useToast((s) => s.show);
+  // 路线图备注：本地草稿优先（IME 合成不被落库回填打断），防抖合并写入
+  const [notesDraft, setNotesDraft] = useState<Record<string, string>>({});
+  const draftsRef = useRef(notesDraft);
+  draftsRef.current = notesDraft;
+  const noteTimer = useRef<number | null>(null);
+  const [editingNote, setEditingNote] = useState<string | null>(null);
+  const saveNote = (label: string, text: string) => {
+    setNotesDraft((d) => ({ ...d, [label]: text }));
+    if (noteTimer.current != null) clearTimeout(noteTimer.current);
+    noteTimer.current = window.setTimeout(() => {
+      void repos.settingsRepo.save({
+        roadmapNotes: {
+          ...(settings?.roadmapNotes ?? {}),
+          ...draftsRef.current,
+          [label]: text,
+        },
+      });
+    }, 400);
+  };
   const [editing, setEditing] = useState(false);
   const [draftStart, setDraftStart] = useState(settings?.semesterStart ?? '');
   const [draftEnd, setDraftEnd] = useState(settings?.semesterEnd ?? '');
@@ -161,47 +180,73 @@ export function SemesterPage() {
       <section className="panel mono" style={{ fontSize: 13 }}>
         <h2>路线图</h2>
         <div className="faint small" style={{ fontFamily: 'inherit', marginBottom: 8 }}>
-          自动生成：课程基础 + 各项目的剩余里程碑按月份铺开。每个月下面可以写自己的备注（比如考试周安排），随输随存。
+          自动生成：课程基础 + 各项目的剩余里程碑按月份铺开。点每月右侧「✎ 备注」写下自己的安排（每行一条），随输随存。
         </div>
-        {semester.months.map((m, i) => (
-          <div key={m.label} style={{ marginBottom: 12 }}>
-            <div style={{ color: 'var(--text)' }}>{m.label}</div>
-            {i === 0 && <div style={{ color: 'var(--text-faint)' }}>│</div>}
-            {m.items.length === 0 ? (
-              <div className="faint">│  （暂无安排）</div>
-            ) : (
-              m.items.map((item, j) => (
-                <div key={j} className={item.dim ? 'faint' : 'muted'}>
-                  {j === m.items.length - 1 && i === semester.months.length - 1 ? '└──' : '├──'}{' '}
-                  {item.text}
+        {semester.months.map((m, i) => {
+          const noteVal = notesDraft[m.label] ?? settings?.roadmapNotes?.[m.label] ?? '';
+          const noteLines = noteVal.split('\n').filter((l) => l.trim());
+          const lastMonth = i === semester.months.length - 1;
+          const lines = [
+            ...m.items.map((it) => ({ text: it.text, dim: it.dim, mine: false })),
+            ...noteLines.map((l) => ({ text: l, dim: false, mine: true })),
+          ];
+          const editing = editingNote === m.label;
+          return (
+            <div key={m.label} style={{ marginBottom: 12 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ color: 'var(--text)' }}>{m.label}</div>
+                <button
+                  className="btn small subtle"
+                  onClick={() => setEditingNote(editing ? null : m.label)}
+                >
+                  {editing ? '收起' : '✎ 备注'}
+                </button>
+              </div>
+              {i === 0 && <div style={{ color: 'var(--text-faint)' }}>│</div>}
+              {lines.length === 0 && !editing && (
+                <div className="faint">│  （暂无安排）</div>
+              )}
+              {lines.map((item, j) => {
+                const isLast = j === lines.length - 1 && lastMonth && !editing;
+                return (
+                  <div
+                    key={j}
+                    className={item.mine ? 'small' : item.dim ? 'faint' : 'muted'}
+                    style={item.mine ? { color: 'var(--accent)' } : undefined}
+                  >
+                    {isLast ? '└──' : '├──'} {item.mine ? '✎ ' : ''}
+                    {item.text}
+                  </div>
+                );
+              })}
+              {editing && (
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <span className="faint">│</span>
+                  <textarea
+                    rows={3}
+                    autoFocus
+                    value={noteVal}
+                    placeholder="每行一条，可写多项…"
+                    aria-label={`${m.label} 备注`}
+                    style={{
+                      background: 'transparent',
+                      border: 'none',
+                      borderBottom: '1px dashed var(--border)',
+                      color: 'var(--text)',
+                      fontFamily: 'inherit',
+                      fontSize: 12.5,
+                      lineHeight: 1.6,
+                      padding: '2px 0',
+                      flex: 1,
+                      resize: 'vertical',
+                    }}
+                    onChange={(e) => saveNote(m.label, e.target.value)}
+                  />
                 </div>
-              ))
-            )}
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginTop: 2 }}>
-              <span className="faint">│</span>
-              <input
-                value={settings?.roadmapNotes?.[m.label] ?? ''}
-                placeholder="✎ 这个月我的安排…"
-                aria-label={`${m.label} 备注`}
-                style={{
-                  background: 'transparent',
-                  border: 'none',
-                  borderBottom: '1px dashed var(--border)',
-                  color: 'var(--text)',
-                  fontFamily: 'inherit',
-                  fontSize: 12.5,
-                  padding: '2px 0',
-                  flex: 1,
-                }}
-                onChange={(e) =>
-                  repos.settingsRepo.save({
-                    roadmapNotes: { ...(settings?.roadmapNotes ?? {}), [m.label]: e.target.value },
-                  })
-                }
-              />
+              )}
             </div>
-          </div>
-        ))}
+          );
+        })}
       </section>
 
       <section className="panel">

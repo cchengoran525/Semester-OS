@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { AIError, chat, extractJSON, probe } from './client';
 import { aiConfig, deepAIConfig, normalizeBaseUrl } from './config';
-import { draftWeeklyReview, suggestTaskBreakdown, suggestWeeklyPlan, weeklyBrief } from './features';
+import { draftWeeklyReview, reviewGap, suggestTaskBreakdown, suggestWeeklyPlan } from './features';
 import type { AIConfig } from './config';
 
 const config: AIConfig = {
@@ -58,6 +58,14 @@ describe('aiConfig', () => {
     expect(normalizeBaseUrl('https://x.test/v4/')).toBe('https://x.test/v4');
     expect(normalizeBaseUrl('https://x.test/v4/chat/completions')).toBe('https://x.test/v4');
   });
+
+  it('passes through personal context when present', () => {
+    const withContext = aiConfig({
+      ai: { ...baseAI, context: '  某大学计算机大二  ' },
+    } as never);
+    expect(withContext).toEqual({ ...baseAI, context: '某大学计算机大二' });
+    expect(aiConfig({ ai: baseAI } as never)).toEqual(baseAI);
+  });
 });
 
 describe('ai client', () => {
@@ -80,6 +88,21 @@ describe('ai client', () => {
       { role: 'user', content: 'u' },
     ]);
     expect(body.response_format).toBeUndefined();
+  });
+
+  it('appends personal context to the system prompt when configured', async () => {
+    await chat({ ...config, context: '某大学计算机大二，两个进行中的项目' }, { system: 's', user: 'u' });
+    const body = JSON.parse(
+      (vi.mocked(fetch).mock.calls[0][1] as RequestInit).body as string,
+    );
+    expect(body.messages[0].content).toContain('关于用户');
+    expect(body.messages[0].content).toContain('某大学计算机大二，两个进行中的项目');
+    // 没有 context 时保持原样
+    await chat(config, { system: 's', user: 'u' });
+    const body2 = JSON.parse(
+      (vi.mocked(fetch).mock.calls[1][1] as RequestInit).body as string,
+    );
+    expect(body2.messages[0].content).toBe('s');
   });
 
   it('passes response_format when json requested', async () => {
@@ -225,27 +248,61 @@ describe('draftWeeklyReview', () => {
   });
 });
 
-describe('weeklyBrief', () => {
+describe('reviewGap', () => {
+  const gapInput = {
+    weekLabel: '第 2 周',
+    outcomes: [
+      { title: '完成数据结构复习', status: '未完成', linkedTasks: 2, scheduledMinutes: 0, completedLinked: 0 },
+    ],
+    completedTasks: [],
+    deepWorkMinutes: 150,
+    deepWorkByContext: [],
+    allocation: [],
+    courses: [],
+    warnings: [],
+  };
+
   afterEach(() => vi.unstubAllGlobals());
 
-  it('returns trimmed plain text', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => completion('  先补操作系统作业。\n')));
-    const brief = await weeklyBrief(config, {
-      weekLabel: '第 2 周',
-      suggestions: [],
-      outcomes: [],
-      warnings: [],
-      deepWorkMinutes: 0,
-      openTaskCount: 3,
-      freeHours: 10,
-    });
-    expect(brief).toBe('先补操作系统作业。');
+  it('keeps valid findings and drops malformed ones', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        completion(
+          JSON.stringify({
+            deviations: [
+              { fact: '计划完成数据结构复习，实际没有为它排任何时间块', action: '下周排两个块' },
+              { action: '没有 fact 应被丢弃' },
+              { fact: '   ' },
+            ],
+          }),
+        ),
+      ),
+    );
+    const gaps = await reviewGap(config, gapInput);
+    expect(gaps).toEqual([
+      { fact: '计划完成数据结构复习，实际没有为它排任何时间块', action: '下周排两个块' },
+    ]);
+  });
+
+  it('returns an empty array when plan and reality match', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => completion('{"deviations":[]}')));
+    expect(await reviewGap(config, gapInput)).toEqual([]);
+  });
+
+  it('throws when the response is not an object with deviations', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => completion('[1,2]')));
+    await expect(reviewGap(config, gapInput)).rejects.toBeInstanceOf(AIError);
   });
 });
 
 describe('suggestWeeklyPlan', () => {
   const planInput = {
     weekLabel: '第 3 周',
+    focusSource: {
+      outcomes: [{ title: '完成数据结构复习', status: '未完成' }],
+      projectMilestones: [{ project: '课程大作业', milestone: 'M2 里程碑' }],
+    },
     tasks: [
       { key: 'T1', title: '写实验报告', estimateMinutes: 90, priority: 'HIGH', dueInDays: 1 },
       { key: 'T2', title: '复习 2.3 节', estimateMinutes: 60, priority: 'MEDIUM', dueInDays: null },
@@ -254,7 +311,7 @@ describe('suggestWeeklyPlan', () => {
       { date: '2026-09-08', start: '14:00', end: '17:00', minutes: 180 },
       { date: '2026-09-09', start: '09:00', end: '11:00', minutes: 120 },
     ],
-    projects: ['AS / Aeroshield'],
+    projects: ['课程大作业'],
     courseHints: [],
     warnings: [],
   };
@@ -266,29 +323,49 @@ describe('suggestWeeklyPlan', () => {
       'fetch',
       vi.fn(async () =>
         completion(
+          JSON.stringify({
+            focus: '先清线性代数债务，课程大作业只保留一个块',
+            placements: [
+              // 完全落在窗口内 → 原样保留
+              { taskId: 'T1', date: '2026-09-08', start: '14:30', end: '16:00', type: 'ENGINEERING', reason: '明天截止' },
+              // 未知任务 → 丢弃
+              { taskId: 'T9', date: '2026-09-08', start: '14:00', end: '15:00', type: 'ADMIN', reason: '' },
+              // 不在任何窗口内 → 丢弃
+              { taskId: 'T2', date: '2026-09-08', start: '10:00', end: '11:00', type: 'DEEP_WORK', reason: '' },
+              // 尾部超出窗口但与 T1 不重叠（T1 到 16:00）→ 裁剪到 16:30–17:00 保留
+              { taskId: 'T2', date: '2026-09-08', start: '16:30', end: '18:30', type: 'ADMIN', reason: '' },
+              // 与 T1 重叠 → 去重丢弃
+              { taskId: 'T2', date: '2026-09-08', start: '15:30', end: '16:30', type: 'DEEP_WORK', reason: '' },
+              // COURSE 不允许 → 回落 DEEP_WORK
+              { taskId: 'T2', date: '2026-09-09', start: '09:00', end: '10:30', type: 'COURSE', reason: '上午清醒' },
+            ],
+          }),
+        ),
+      ),
+    );
+    const plan = await suggestWeeklyPlan(config, planInput);
+    expect(plan.focus).toBe('先清线性代数债务，课程大作业只保留一个块');
+    expect(plan.placements).toEqual([
+      { taskId: 'T1', date: '2026-09-08', start: '14:30', end: '16:00', type: 'ENGINEERING', reason: '明天截止' },
+      { taskId: 'T2', date: '2026-09-08', start: '16:30', end: '17:00', type: 'ADMIN', reason: '' },
+      { taskId: 'T2', date: '2026-09-09', start: '09:00', end: '10:30', type: 'DEEP_WORK', reason: '上午清醒' },
+    ]);
+  });
+
+  it('accepts a legacy bare array (no focus) for robustness', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        completion(
           JSON.stringify([
-            // 完全落在窗口内 → 原样保留
-            { taskId: 'T1', date: '2026-09-08', start: '14:30', end: '16:00', type: 'ENGINEERING', reason: '明天截止' },
-            // 未知任务 → 丢弃
-            { taskId: 'T9', date: '2026-09-08', start: '14:00', end: '15:00', type: 'ADMIN', reason: '' },
-            // 不在任何窗口内 → 丢弃
-            { taskId: 'T2', date: '2026-09-08', start: '10:00', end: '11:00', type: 'DEEP_WORK', reason: '' },
-            // 尾部超出窗口但与 T1 不重叠（T1 到 16:00）→ 裁剪到 16:30–17:00 保留
-            { taskId: 'T2', date: '2026-09-08', start: '16:30', end: '18:30', type: 'ADMIN', reason: '' },
-            // 与 T1 重叠 → 去重丢弃
-            { taskId: 'T2', date: '2026-09-08', start: '15:30', end: '16:30', type: 'DEEP_WORK', reason: '' },
-            // COURSE 不允许 → 回落 DEEP_WORK
-            { taskId: 'T2', date: '2026-09-09', start: '09:00', end: '10:30', type: 'COURSE', reason: '上午清醒' },
+            { taskId: 'T1', date: '2026-09-08', start: '14:00', end: '15:00', type: 'DEEP_WORK', reason: '' },
           ]),
         ),
       ),
     );
     const plan = await suggestWeeklyPlan(config, planInput);
-    expect(plan).toEqual([
-      { taskId: 'T1', date: '2026-09-08', start: '14:30', end: '16:00', type: 'ENGINEERING', reason: '明天截止' },
-      { taskId: 'T2', date: '2026-09-08', start: '16:30', end: '17:00', type: 'ADMIN', reason: '' },
-      { taskId: 'T2', date: '2026-09-09', start: '09:00', end: '10:30', type: 'DEEP_WORK', reason: '上午清醒' },
-    ]);
+    expect(plan.focus).toBe('');
+    expect(plan.placements).toHaveLength(1);
   });
 
   it('drops everything when no placement fits a window', async () => {

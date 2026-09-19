@@ -96,9 +96,12 @@ function TaskModal() {
         <input
           autoFocus
           value={title}
-          placeholder="例如：给 AS 中翼舵机安装座建立 v0.3 CAD"
+          placeholder="例如：完成数据结构第 3 章习题"
           onChange={(e) => setTitle(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && save()}
+          onKeyDown={(e) => {
+            if (e.nativeEvent.isComposing || e.keyCode === 229) return; // 输入法合成中的回车是"候选确认"
+            if (e.key === 'Enter') save();
+          }}
         />
       </label>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
@@ -179,11 +182,8 @@ function BlockModal() {
     }
     const start = atTime(date, startTime);
     const end = atTime(date, endTime);
+    // 软限制：与已有块重叠只提醒不拦截（时间安排是用户的决定）
     const clash = conflictsWith({ start, end }, blocks);
-    if (clash.length > 0) {
-      show(`时间冲突：已有 Block ${clash[0].start.slice(11, 16)}–${clash[0].end.slice(11, 16)}。可调整时间或保留冲突。`, 'error');
-      return;
-    }
     await repos.blockRepo.create({
       start,
       end,
@@ -199,6 +199,11 @@ function BlockModal() {
       await repos.taskRepo.update(id, { status: 'DOING' });
     }
     void settings;
+    if (clash.length > 0) {
+      show(`时间块已保存，但与已有块 ${clash[0].start.slice(11, 16)}–${clash[0].end.slice(11, 16)} 重叠`);
+    } else {
+      show('时间块已创建');
+    }
     close();
   };
 
@@ -254,27 +259,30 @@ function BlockModal() {
           </select>
         </label>
       </div>
-      <label className="field">
+      <div className="field">
         <span>关联任务（可选）</span>
         <div style={{ maxHeight: 160, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 5, padding: 4 }}>
           {openTasks.length === 0 && <span className="faint small">暂无待办任务</span>}
           {openTasks.map((t) => (
-            <label key={t.id} className="small modal-task-row">
+            <div key={t.id} className="small modal-task-row">
               <input
                 type="checkbox"
+                id={`assoc-${t.id}`}
                 checked={taskIds.includes(t.id)}
                 onChange={(e) =>
                   setTaskIds(e.target.checked ? [...taskIds, t.id] : taskIds.filter((x) => x !== t.id))
                 }
               />
-              <span className="modal-task-title">{t.title}</span>
+              <label htmlFor={`assoc-${t.id}`} className="modal-task-title" style={{ cursor: 'pointer' }}>
+                {t.title}
+              </label>
               <span className="faint modal-task-context">
                 {t.projectId ? projectById.get(t.projectId)?.name : courseById.get(t.courseId ?? '')?.name ?? ''}
               </span>
-            </label>
+            </div>
           ))}
         </div>
-      </label>
+      </div>
       <Actions onCancel={close} onSave={save} />
     </Modal>
   );

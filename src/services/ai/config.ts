@@ -11,6 +11,8 @@ export interface AIConfig {
   baseUrl: string;
   apiKey: string;
   model: string;
+  /** 个人长期背景（可选），注入 system prompt。 */
+  context?: string;
 }
 
 /** 容错处理用户粘贴的各种地址形式：尾斜杠、完整 chat/completions 路径。 */
@@ -29,7 +31,8 @@ export function aiConfig(settings?: Settings | null): AIConfig | null {
   const apiKey = ai.apiKey.trim();
   const model = ai.model.trim();
   if (!baseUrl || !apiKey || !model) return null;
-  return { baseUrl, apiKey, model };
+  const context = (ai.context ?? '').trim();
+  return context ? { baseUrl, apiKey, model, context } : { baseUrl, apiKey, model };
 }
 
 /**

@@ -3,15 +3,15 @@ import { AIError, chat, extractJSON } from './client';
 import type { AIConfig } from './config';
 import {
   BREAKDOWN_SYSTEM,
-  BRIEF_SYSTEM,
+  GAP_SYSTEM,
   REVIEW_SYSTEM,
   WEEK_PLAN_SYSTEM,
   breakdownUser,
-  briefUser,
+  gapUser,
   reviewUser,
   weekPlanUser,
-  type BriefInput,
   type BreakdownInput,
+  type GapInput,
   type ReviewDraftInput,
   type WeekPlanInput,
 } from './prompts';
@@ -112,15 +112,42 @@ export async function draftWeeklyReview(
 
 // ── 下周简报 ──────────────────────────────────────────────────────────
 
-export async function weeklyBrief(config: AIConfig, input: BriefInput): Promise<string> {
-  const text = await chat(config, {
-    system: BRIEF_SYSTEM,
-    user: briefUser(input),
-    temperature: 0.5,
+// ── 计划 vs 实际对照 ──────────────────────────────────────────────────
+
+export interface GapFinding {
+  fact: string;
+  action: string;
+}
+
+/**
+ * 对照本周"计划 vs 实际"。与旧版简报不同：不做数据复述，只指出偏离。
+ * 返回空数组 = 计划与实际基本一致（这是合法且有价值的结论）。
+ */
+export async function reviewGap(config: AIConfig, input: GapInput): Promise<GapFinding[]> {
+  const raw = await chat(config, {
+    system: GAP_SYSTEM,
+    user: gapUser(input),
+    json: true,
+    temperature: 0.4,
   });
-  const brief = text.trim();
-  if (!brief) throw new AIError('AI 返回了空简报', 0);
-  return brief.slice(0, 800);
+  const parsed = extractJSON<{ deviations?: unknown }>(raw);
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new AIError('AI 返回格式异常：期望包含 deviations 的 JSON 对象', 0);
+  }
+  const list = Array.isArray(parsed.deviations) ? parsed.deviations : [];
+  return list
+    .slice(0, 2)
+    .map((item): GapFinding | null => {
+      if (typeof item !== 'object' || item === null) return null;
+      const o = item as Record<string, unknown>;
+      const fact = typeof o.fact === 'string' ? o.fact.trim().slice(0, 160) : '';
+      if (!fact) return null;
+      return {
+        fact,
+        action: typeof o.action === 'string' ? o.action.trim().slice(0, 120) : '',
+      };
+    })
+    .filter((g): g is GapFinding => g !== null);
 }
 
 // ── 一键周计划 ────────────────────────────────────────────────────────
@@ -162,10 +189,16 @@ const pad = (n: number): string => String(n).padStart(2, '0');
 const minToHHMM = (m: number): string => `${pad(Math.floor(m / 60))}:${pad(m % 60)}`;
 const HHMM_RE = /^\d{1,2}:\d{2}$/;
 
+export interface WeeklyPlan {
+  /** 未来 7 天的焦点与取舍（一句话）。 */
+  focus: string;
+  placements: PlannedBlock[];
+}
+
 export async function suggestWeeklyPlan(
   config: AIConfig,
   input: WeekPlanInput,
-): Promise<PlannedBlock[]> {
+): Promise<WeeklyPlan> {
   const raw = await chat(config, {
     system: WEEK_PLAN_SYSTEM,
     user: weekPlanUser(input),
@@ -175,9 +208,25 @@ export async function suggestWeeklyPlan(
     reasoningEffort: 'high',
   });
   const parsed = extractJSON<unknown>(raw);
-  if (!Array.isArray(parsed)) {
-    throw new AIError('AI 返回格式异常：期望 JSON 数组', 0);
+  // 兼容两种形态：{focus, placements}（当前契约）或裸数组（旧模型/未遵循格式时）
+  const focus =
+    !Array.isArray(parsed) && typeof (parsed as { focus?: unknown })?.focus === 'string'
+      ? ((parsed as { focus: string }).focus.trim().slice(0, 120))
+      : '';
+  const rawPlacements = Array.isArray(parsed)
+    ? parsed
+    : (parsed as { placements?: unknown })?.placements;
+  if (!Array.isArray(rawPlacements)) {
+    throw new AIError('AI 返回格式异常：期望包含 placements 的 JSON 对象', 0);
   }
+  const placements = validatePlacements(rawPlacements, input);
+  if (placements.length === 0) {
+    throw new AIError('AI 没有给出可行的排期方案（所有条目都落在空闲窗口之外）', 0);
+  }
+  return { focus, placements };
+}
+
+function validatePlacements(parsed: unknown[], input: WeekPlanInput): PlannedBlock[] {
   const knownTasks = new Set(input.tasks.map((t) => t.key));
   const windowDates = new Set(input.windows.map((w) => w.date));
 
@@ -231,8 +280,5 @@ export async function suggestWeeklyPlan(
     if (!overlaps) kept.push(item);
   }
 
-  if (kept.length === 0) {
-    throw new AIError('AI 没有给出可行的排期方案（所有条目都落在空闲窗口之外）', 0);
-  }
   return kept.slice(0, 10);
 }

@@ -14,7 +14,9 @@ import { useApp } from '../components/AppProvider';
 import { AIThinking, Bar, EmptyState } from '../components/common';
 import * as repos from '../storage/repositories';
 import { useToast, useUndo } from '../store/uiStore';
-import { PRIORITY_LABELS, PROJECT_STATUS_LABELS, type Milestone, type Project, type ProjectStatus } from '../domain/types';
+import { PRIORITY_LABELS, PROJECT_STATUS_LABELS, TASK_STATUS_LABELS, type Milestone, type Project, type ProjectStatus, type Task } from '../domain/types';
+import { durationLabel } from '../services/timeService';
+import { TaskDetailModal } from '../components/TaskDetailModal';
 import { currentMilestone, milestoneProgress, taskStats, wipStatus } from '../services/projectService';
 import { aiConfig } from '../services/ai/config';
 import { suggestTaskBreakdown, type SuggestedTask } from '../services/ai/features';
@@ -27,12 +29,14 @@ function ProjectCard({
   tasks,
   expanded,
   onToggle,
+  onOpenTask,
 }: {
   project: Project;
   milestones: Milestone[];
-  tasks: import('../domain/types').Task[];
+  tasks: Task[];
   expanded: boolean;
   onToggle: () => void;
+  onOpenTask: (task: Task) => void;
 }) {
   const show = useToast((s) => s.show);
   const { settings } = useApp();
@@ -125,6 +129,39 @@ function ProjectCard({
           <div className="small muted" style={{ marginBottom: 6 }}>
             任务：{stats.done}/{stats.total} 已完成（进度主要由里程碑决定）
           </div>
+          {/* 任务清单：这里就是"任务 N"的实际来源，点开可看详情/完成 */}
+          {(() => {
+            const own = tasks
+              .filter((t) => t.projectId === project.id)
+              .sort((a, b) => {
+                const order = { DOING: 0, READY: 1, BACKLOG: 2, DONE: 3 } as const;
+                return order[a.status] - order[b.status];
+              });
+            return (
+              <div style={{ marginBottom: 8 }}>
+                <div className="faint small" style={{ marginBottom: 2 }}>
+                  本项目任务（{own.length}）· 点击查看详情
+                </div>
+                <div className="kanban-scroll">
+                  {own.length === 0 && <div className="faint small">还没有任务</div>}
+                  {own.map((t) => (
+                    <div
+                      key={t.id}
+                      className="modal-task-row small"
+                      style={{ cursor: 'pointer' }}
+                      onClick={() => onOpenTask(t)}
+                    >
+                      <span className="tag" style={{ flexShrink: 0 }}>{TASK_STATUS_LABELS[t.status]}</span>
+                      <span className="modal-task-title">{t.title}</span>
+                      <span className="mono faint small" style={{ flexShrink: 0 }}>
+                        {durationLabel(t.estimateMinutes)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
           {/* 做完的 / 要做的 分两列，框内滚动 */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
             <div>
@@ -252,6 +289,7 @@ export function ProjectsPage() {
   const show = useToast((s) => s.show);
   const push = useUndo((s) => s.push);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [detailTask, setDetailTask] = useState<Task | null>(null);
 
   const wip = wipStatus(projects, settings?.wipLimit ?? 2);
 
@@ -319,12 +357,17 @@ export function ProjectsPage() {
                   tasks={tasks}
                   expanded={expanded === p.id}
                   onToggle={() => setExpanded(expanded === p.id ? null : p.id)}
+                  onOpenTask={setDetailTask}
                 />
               ))}
             </KanbanColumn>
           );
         })}
       </div>
+
+      {detailTask && (
+        <TaskDetailModal task={detailTask} onClose={() => setDetailTask(null)} />
+      )}
 
       <DragOverlay dropAnimation={null}>
         {dragging ? (

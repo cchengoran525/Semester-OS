@@ -1,16 +1,28 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useApp } from '../components/AppProvider';
 import { db } from '../storage/db';
-import { seedIfFirstLaunch } from '../storage/seed';
+import { SEED_PROJECT_NAMES, seedIfFirstLaunch } from '../storage/seed';
 import * as repos from '../storage/repositories';
 import { useToast } from '../store/uiStore';
-import type { Settings } from '../domain/types';
+import type { ScheduleOverride, Settings } from '../domain/types';
 import { downloadJSON, exportAll, ImportError, importAll, parseImport } from '../services/importExport';
 import { plankaConfig, type PlankaConfig } from '../services/planka/config';
 import { PlankaClient, type ProbeResult } from '../services/planka/client';
 import { pullCardsAsTasks, pushTaskAsCard } from '../services/planka/sync';
 import { aiConfig, deepAIConfig, normalizeBaseUrl } from '../services/ai/config';
 import { probe, type AIProbeResult } from '../services/ai/client';
+import {
+  backupDirName,
+  lastBackupAt,
+  localBackupDir,
+  pickBackupDir,
+  probeServerDetail,
+  writeLocalBackup,
+  pullSnapshot,
+  pushSnapshot,
+  supportsFileBackup,
+  writeBackupFile,
+} from '../services/backup';
 
 const PROBE_LABEL: Record<ProbeResult, string> = {
   ok: '已连接，令牌有效',
@@ -55,14 +67,45 @@ export function SettingsPage() {
   const [aiForm, setAiForm] = useState<AIForm>(() => settings?.ai ?? { baseUrl: '', apiKey: '', model: '' });
   const [aiStatus, setAiStatus] = useState<AIProbeResult | 'testing' | null>(null);
   const [deepForm, setDeepForm] = useState<DeepForm>(() => deepFormOf(settings?.ai));
+  const [contextForm, setContextForm] = useState<string>(() => settings?.ai?.context ?? '');
   const [deepStatus, setDeepStatus] = useState<AIProbeResult | 'testing' | null>(null);
   const [busy, setBusy] = useState(false);
+  const [backupDir, setBackupDir] = useState<string | null>(null);
+  const [lastBackup, setLastBackup] = useState<string | null>(null);
+  const [syncBusy, setSyncBusy] = useState(false);
+  const [syncDetail, setSyncDetail] = useState<string | null>(null);
+  const supported = supportsFileBackup();
+  const [showFileBackup, setShowFileBackup] = useState(false);
+  const [localDir, setLocalDir] = useState<string | null>(null);
   const planka: PlankaConfig | null = plankaConfig();
+
+  useEffect(() => {
+    void backupDirName().then(setBackupDir);
+    void lastBackupAt().then(setLastBackup);
+    void localBackupDir().then(setLocalDir);
+  }, []);
+
+  // settings 异步加载晚于首帧：AI 表单可能以空值初始化。若用户此后编辑任一字段，
+  // 会把空表单整体写回、清掉已有配置（已真实发生过）。在"用户尚未编辑过"时，
+  // 让表单跟随已加载的设置；一旦编辑过就以表单为准。
+  const aiTouchedRef = useRef(false);
+  const aiKey = settings?.ai ? JSON.stringify(settings.ai) : '';
+  useEffect(() => {
+    if (aiTouchedRef.current || !settings?.ai) return;
+    setAiForm({
+      baseUrl: settings.ai.baseUrl,
+      apiKey: settings.ai.apiKey,
+      model: settings.ai.model,
+    });
+    setDeepForm(deepFormOf(settings.ai));
+    setContextForm(settings.ai.context ?? '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aiKey]);
 
   if (!settings) return null;
 
   const aiCfg = aiConfig({ ...settings, ai: aiForm });
-  const deepCfg = deepAIConfig({ ...settings, ai: { ...aiForm, deep: deepForm } });
+  const deepCfg = deepAIConfig({ ...settings, ai: { ...aiForm, context: contextForm, deep: deepForm } });
 
   const set = (patch: Partial<Settings>) => repos.settingsRepo.save(patch);
 
@@ -172,6 +215,267 @@ export function SettingsPage() {
       </section>
 
       <section className="panel" style={{ marginBottom: 14, maxWidth: 560 }}>
+        <h2>备份与同步</h2>
+        <div className="small faint" style={{ marginBottom: 10 }}>
+          数据在浏览器 IndexedDB 里，清站点数据会一起没。两条保险可以同时开：
+          ① 落盘备份——写进你选的本地文件夹（主文件 + history/ 每日快照）；
+          ② 服务器同步——整库快照推到你自己的服务器，启动时比对拉取。
+          自动模式：改完 15 秒内保存（最长 60 秒必存一次，离开页面立即补存）。
+          自动推送带空数据保护——数据量骤降时会拒绝推送并提醒，防止误清空覆盖好数据。
+        </div>
+
+        {/* ① 本机文件夹备份：由本机开发服务器直接写盘，无需浏览器授权 */}
+        <div style={{ marginTop: 10, borderTop: '1px dashed var(--border)', paddingTop: 10 }}>
+          <strong className="small">本机文件夹备份</strong>
+          <div className="small faint" style={{ margin: '4px 0 8px' }}>
+            把 JSON 写进你 Mac 上的文件夹（主文件 + history/ 每日留档，保留最近 100 份），
+            经本机开发服务器落盘，不依赖浏览器授权，清浏览器数据也不受影响。
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span className="mono small faint">{localDir ? localDir : '未检测到本机备份端点（开发服务器需重启）'}</span>
+            <button
+              className="btn small primary"
+              disabled={!localDir}
+              onClick={async () => {
+                const r = await writeLocalBackup();
+                show(
+                  r ? `已备份到 ${r.dir}` : '本机备份失败：端点不可用（确认开发服务器已重启）',
+                  r ? 'info' : 'error',
+                );
+                setLastBackup(await lastBackupAt());
+              }}
+            >
+              立即备份到本机
+            </button>
+            <label className="small" style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+              <input
+                type="checkbox"
+                checked={settings.sync?.autoBackup ?? false}
+                onChange={(e) => repos.settingsRepo.patchSync({ autoBackup: e.target.checked })}
+              />
+              数据变更后自动备份
+            </label>
+          </div>
+          <div className="faint small" style={{ marginTop: 4 }}>
+            {lastBackup ? `最近一次备份：${lastBackup.slice(0, 19).replace('T', ' ')}` : '还没有备份记录'}
+          </div>
+
+          {/* 浏览器授权式备份（部署到别处时用） */}
+          <div style={{ marginTop: 8 }}>
+            <button className="btn small subtle" onClick={() => setShowFileBackup(!showFileBackup)}>
+              {showFileBackup ? '收起：浏览器文件夹备份' : '▸ 浏览器文件夹备份（部署到其它环境时用）'}
+            </button>
+            {showFileBackup && (
+              <div style={{ marginTop: 8 }}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  {!supported && <span className="tag">当前浏览器不支持（需 Chrome/Edge）</span>}
+                  {supported && (
+                    <>
+                      <button
+                        className="btn small"
+                        onClick={async () => {
+                          try {
+                            const name = await pickBackupDir();
+                            setBackupDir(name);
+                            show(`备份文件夹：${name}`);
+                          } catch (e) {
+                            if ((e as Error).name !== 'AbortError') show('选择文件夹失败', 'error');
+                          }
+                        }}
+                      >
+                        {backupDir ? `更换文件夹（当前：${backupDir}）` : '选择备份文件夹'}
+                      </button>
+                      <button
+                        className="btn small"
+                        disabled={!backupDir}
+                        onClick={async () => {
+                          const r = await writeBackupFile();
+                          show(r ? `已备份到 ${r.dir}` : '备份失败：文件夹不可用', r ? 'info' : 'error');
+                          setLastBackup(await lastBackupAt());
+                        }}
+                      >
+                        立即备份
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* ② 服务器同步 */}
+        <div style={{ marginTop: 14 }}>
+          <strong className="small">服务器同步</strong>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 8, marginTop: 6 }}>
+            <label className="field">
+              <span>服务器地址</span>
+              <input
+                value={settings.sync?.url ?? ''}
+                placeholder="如 http://192.168.1.10:8787"
+                onChange={(e) => repos.settingsRepo.patchSync({ url: e.target.value.trim() })}
+              />
+            </label>
+            <label className="field">
+              <span>令牌（可选，与服务器端约定）</span>
+              <input
+                type="password"
+                value={settings.sync?.token ?? ''}
+                placeholder="Bearer token"
+                onChange={(e) => repos.settingsRepo.patchSync({ token: e.target.value })}
+              />
+            </label>
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 8 }}>
+            <button
+              className="btn small subtle"
+              onClick={async () => {
+                // 快捷地址不在源码里硬编码：从构建期环境变量读取（见 .env.example）
+                const env = import.meta.env as Record<string, string | undefined>;
+                await repos.settingsRepo.patchSync({
+                  url: '/api',
+                  ...(env.VITE_SYNC_TOKEN ? { token: env.VITE_SYNC_TOKEN } : {}),
+                });
+                show('已切换为该本机代理（浏览器不会拦）');
+              }}
+            >
+              用开发服务器代理（推荐）
+            </button>
+            {(import.meta.env as Record<string, string | undefined>).VITE_SYNC_DIRECT_URL && (
+              <button
+                className="btn small subtle"
+                onClick={async () => {
+                  const env = import.meta.env as Record<string, string | undefined>;
+                  await repos.settingsRepo.patchSync({
+                    url: env.VITE_SYNC_DIRECT_URL ?? '',
+                    ...(env.VITE_SYNC_TOKEN ? { token: env.VITE_SYNC_TOKEN } : {}),
+                  });
+                  show('已填入直连地址（如被浏览器拦截，改用代理）');
+                }}
+              >
+                直连局域网服务器
+              </button>
+            )}
+            <button
+              className="btn small"
+              disabled={!settings.sync?.url || syncBusy}
+              onClick={async () => {
+                setSyncBusy(true);
+                try {
+                  const r = await probeServerDetail({ ...(settings.sync ?? {}) });
+                  setSyncDetail(r.detail);
+                  show(r.detail, r.ok ? 'info' : 'error');
+                } finally {
+                  setSyncBusy(false);
+                }
+              }}
+            >
+              测试连接
+            </button>
+            <button
+              className="btn small primary"
+              disabled={!settings.sync?.url || syncBusy}
+              onClick={async () => {
+                setSyncBusy(true);
+                try {
+                  const r = await pushSnapshot({ ...(settings.sync ?? {}) }, settings, { manual: true });
+                  show(
+                    r.status === 'pushed'
+                      ? `已推送快照（${(r.updatedAt ?? '').slice(0, 19).replace('T', ' ')}）`
+                      : r.status === 'skipped-unchanged'
+                        ? '内容与上次一致，无需推送'
+                        : (r.detail ?? '已跳过'),
+                  );
+                } catch (e) {
+                  show(`推送失败：${(e as Error).message}`, 'error');
+                } finally {
+                  setSyncBusy(false);
+                }
+              }}
+            >
+              立即推送
+            </button>
+            <button
+              className="btn small"
+              disabled={!settings.sync?.url || syncBusy}
+              onClick={async () => {
+                setSyncBusy(true);
+                try {
+                  const r = await pullSnapshot({ ...(settings.sync ?? {}) });
+                  show(r.applied ? '已从服务器恢复' : r.reason ?? '无需拉取');
+                } catch (e) {
+                  show(`拉取失败：${(e as Error).message}`, 'error');
+                } finally {
+                  setSyncBusy(false);
+                }
+              }}
+            >
+              从服务器恢复
+            </button>
+            <label className="small" style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+              <input
+                type="checkbox"
+                checked={settings.sync?.autoSync ?? false}
+                onChange={(e) => repos.settingsRepo.patchSync({ autoSync: e.target.checked })}
+              />
+              数据变更后自动推送
+            </label>
+            {syncDetail && <span className="tag">{syncDetail}</span>}
+          </div>
+          <div className="faint small" style={{ marginTop: 6 }}>
+            {settings.sync?.lastSyncedAt
+              ? `最近同步：${settings.sync.lastSyncedAt.slice(0, 19).replace('T', ' ')}`
+              : '还没有同步记录'}
+            {' · '}
+            参考服务端脚本见项目里的 <span className="mono">server/snapshot-server.mjs</span>
+          </div>
+        </div>
+      </section>
+
+      <section className="panel" style={{ marginBottom: 14, maxWidth: 560 }}>
+        <h2>调休与假期</h2>
+        <div className="small faint" style={{ marginBottom: 8 }}>
+          放假 = 当天无课；调休 = 当天按指定星期几的课表上课（可限定单/双周口径）。日历上会标「休」「调」。
+        </div>
+        {(settings.scheduleOverrides ?? []).length === 0 && (
+          <div className="faint small">还没有例外日。</div>
+        )}
+        {(settings.scheduleOverrides ?? [])
+          .slice()
+          .sort((a, b) => a.date.localeCompare(b.date))
+          .map((o) => (
+            <div key={o.date} className="modal-task-row small">
+              <span className="mono" style={{ width: 96 }}>{o.date}</span>
+              <span className="modal-task-title">
+                {o.off ? '放假' : `上周${'一二三四五六日'[(o.weekday ?? 1) - 1]}的课`}
+                {o.recurrence === 'ODD_WEEK' ? '（单周）' : o.recurrence === 'EVEN_WEEK' ? '（双周）' : ''}
+                {o.label && !o.off ? ` · ${o.label}` : ''}
+              </span>
+              <button
+                className="btn small subtle"
+                onClick={() =>
+                  set({
+                    scheduleOverrides: (settings.scheduleOverrides ?? []).filter((x) => x.date !== o.date),
+                  })
+                }
+              >
+                删除
+              </button>
+            </div>
+          ))}
+        <OverrideAdder
+          onAdd={(ov) =>
+            set({
+              scheduleOverrides: [
+                ...(settings.scheduleOverrides ?? []).filter((x) => x.date !== ov.date),
+                ov,
+              ],
+            })
+          }
+        />
+      </section>
+
+      <section className="panel" style={{ marginBottom: 14, maxWidth: 560 }}>
         <h2>数据</h2>
         <div style={{ display: 'flex', gap: 8 }}>
           <button className="btn" onClick={doExport}>
@@ -195,7 +499,39 @@ export function SettingsPage() {
         <div className="small faint" style={{ marginTop: 8 }}>
           数据保存在本地浏览器 IndexedDB。Import 会覆盖现有数据，导入前会校验 schema。
         </div>
-        <div style={{ marginTop: 10 }}>
+        <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button
+            className="btn small subtle"
+            onClick={async () => {
+              if (
+                !window.confirm(
+                  '清理内置演示数据？将删除：示例任务（t1–t5）、示例本周成果、内置里程碑、内置项目描述。你自己创建的内容不受影响。',
+                )
+              )
+                return;
+              const isDemoTask = (id: string) => /^t\d+$/.test(id);
+              const isDemoOutcome = (id: string) => /^wo\d+$/.test(id);
+              const isDemoMilestone = (id: string) => /^p\d+m\d+$/.test(id);
+              const tasks = await db.tasks.toArray();
+              await db.tasks.bulkDelete(tasks.filter((t) => isDemoTask(t.id)).map((t) => t.id));
+              const outs = await db.weeklyOutcomes.toArray();
+              await db.weeklyOutcomes.bulkDelete(outs.filter((o) => isDemoOutcome(o.id)).map((o) => o.id));
+              const mss = await db.milestones.toArray();
+              await db.milestones.bulkDelete(mss.filter((m) => isDemoMilestone(m.id)).map((m) => m.id));
+              const projects = await db.projects.toArray();
+              for (const p of projects.filter((x) => SEED_PROJECT_NAMES.includes(x.name))) {
+                await db.projects.put({
+                  ...p,
+                  description: undefined,
+                  notes: undefined,
+                  currentMilestoneId: undefined,
+                });
+              }
+              show('演示数据已清理');
+            }}
+          >
+            清理内置演示数据
+          </button>
           <button
             className="btn small danger"
             onClick={async () => {
@@ -264,15 +600,17 @@ export function SettingsPage() {
               value={aiForm.baseUrl}
               placeholder={`回车填入智谱默认 · ${ZHIPU_DEFAULTS.baseUrl}`}
               onChange={(e) => {
+                aiTouchedRef.current = true;
                 const baseUrl = e.target.value;
                 setAiForm({ ...aiForm, baseUrl });
-                set({ ai: { ...aiForm, baseUrl: normalizeBaseUrl(baseUrl), deep: deepForm } });
+                set({ ai: { ...aiForm, context: contextForm, baseUrl: normalizeBaseUrl(baseUrl), deep: deepForm } });
               }}
               onKeyDown={(e) => {
-                if (e.key !== 'Enter' || aiForm.baseUrl.trim()) return;
+                if (e.nativeEvent.isComposing || e.key !== 'Enter' || aiForm.baseUrl.trim()) return;
+                aiTouchedRef.current = true;
                 const baseUrl = ZHIPU_DEFAULTS.baseUrl;
                 setAiForm({ ...aiForm, baseUrl });
-                set({ ai: { ...aiForm, baseUrl, deep: deepForm } });
+                set({ ai: { ...aiForm, context: contextForm, baseUrl, deep: deepForm } });
                 (e.target as HTMLInputElement).blur();
               }}
             />
@@ -283,15 +621,17 @@ export function SettingsPage() {
               value={aiForm.model}
               placeholder={`回车填入默认 · ${ZHIPU_DEFAULTS.model}`}
               onChange={(e) => {
+                aiTouchedRef.current = true;
                 const model = e.target.value;
                 setAiForm({ ...aiForm, model });
-                set({ ai: { ...aiForm, model, deep: deepForm } });
+                set({ ai: { ...aiForm, context: contextForm, model, deep: deepForm } });
               }}
               onKeyDown={(e) => {
                 if (e.key !== 'Enter' || aiForm.model.trim()) return;
+                aiTouchedRef.current = true;
                 const model = ZHIPU_DEFAULTS.model;
                 setAiForm({ ...aiForm, model });
-                set({ ai: { ...aiForm, model, deep: deepForm } });
+                set({ ai: { ...aiForm, context: contextForm, model, deep: deepForm } });
                 (e.target as HTMLInputElement).blur();
               }}
             />
@@ -303,9 +643,10 @@ export function SettingsPage() {
               value={aiForm.apiKey}
               placeholder="sk-…"
               onChange={(e) => {
+                aiTouchedRef.current = true;
                 const apiKey = e.target.value;
                 setAiForm({ ...aiForm, apiKey });
-                set({ ai: { ...aiForm, apiKey, deep: deepForm } });
+                set({ ai: { ...aiForm, context: contextForm, apiKey, deep: deepForm } });
               }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
@@ -313,10 +654,23 @@ export function SettingsPage() {
             />
           </label>
         </div>
+        <label className="field" style={{ marginTop: 10 }}>
+          <span>个人长期背景（可选 · 注入所有 AI 请求）</span>
+          <textarea
+            rows={5}
+            value={contextForm}
+            placeholder="你是谁、在做什么项目、长期目标。例如：某大学计算机大二；在做一个课程大作业和一个开源项目；本学期想养成每天复习的习惯。AI 周计划会据此定焦点。"
+            onChange={(e) => {
+              aiTouchedRef.current = true;
+              setContextForm(e.target.value);
+              set({ ai: { ...aiForm, context: e.target.value, deep: deepForm } });
+            }}
+          />
+        </label>
         <div className="small faint" style={{ marginTop: 8 }}>
           默认接入智谱 GLM：地址和模型名留空时按回车即可写入默认值，通常只需再填
-          API Key。Key 只保存在本地浏览器 IndexedDB，不进构建产物；仅在点击时把
-          当次所需的摘要数据发给所填服务。
+          API Key。Key 与背景只保存在本地浏览器 IndexedDB，不进构建产物、不随
+          导出 JSON 离开设备；仅在点击时把当次所需的摘要数据发给所填服务。
         </div>
         <div style={{ marginTop: 10 }}>
           <button
@@ -350,15 +704,17 @@ export function SettingsPage() {
               value={deepForm.baseUrl ?? ''}
               placeholder={aiCfg ? aiCfg.baseUrl : '默认与快速模型相同'}
               onChange={(e) => {
+                aiTouchedRef.current = true;
                 const baseUrl = e.target.value;
                 setDeepForm({ ...deepForm, baseUrl });
-                set({ ai: { ...aiForm, deep: { ...deepForm, baseUrl: normalizeBaseUrl(baseUrl) } } });
+                set({ ai: { ...aiForm, context: contextForm, deep: { ...deepForm, baseUrl: normalizeBaseUrl(baseUrl) } } });
               }}
               onKeyDown={(e) => {
                 if (e.key !== 'Enter' || (deepForm.baseUrl ?? '').trim()) return;
+                aiTouchedRef.current = true;
                 const baseUrl = ZHIPU_DEFAULTS.baseUrl;
                 setDeepForm({ ...deepForm, baseUrl });
-                set({ ai: { ...aiForm, deep: { ...deepForm, baseUrl } } });
+                set({ ai: { ...aiForm, context: contextForm, deep: { ...deepForm, baseUrl } } });
                 (e.target as HTMLInputElement).blur();
               }}
             />
@@ -369,15 +725,17 @@ export function SettingsPage() {
               value={deepForm.model ?? ''}
               placeholder={aiCfg ? `默认 ${aiCfg.model}` : '默认与快速模型相同'}
               onChange={(e) => {
+                aiTouchedRef.current = true;
                 const model = e.target.value;
                 setDeepForm({ ...deepForm, model });
-                set({ ai: { ...aiForm, deep: { ...deepForm, model } } });
+                set({ ai: { ...aiForm, context: contextForm, deep: { ...deepForm, model } } });
               }}
               onKeyDown={(e) => {
                 if (e.key !== 'Enter' || (deepForm.model ?? '').trim()) return;
+                aiTouchedRef.current = true;
                 const model = aiForm.model.trim() || ZHIPU_DEFAULTS.model;
                 setDeepForm({ ...deepForm, model });
-                set({ ai: { ...aiForm, deep: { ...deepForm, model } } });
+                set({ ai: { ...aiForm, context: contextForm, deep: { ...deepForm, model } } });
                 (e.target as HTMLInputElement).blur();
               }}
             />
@@ -389,9 +747,10 @@ export function SettingsPage() {
               value={deepForm.apiKey ?? ''}
               placeholder="默认与快速模型相同"
               onChange={(e) => {
+                aiTouchedRef.current = true;
                 const apiKey = e.target.value;
                 setDeepForm({ ...deepForm, apiKey });
-                set({ ai: { ...aiForm, deep: { ...deepForm, apiKey } } });
+                set({ ai: { ...aiForm, context: contextForm, deep: { ...deepForm, apiKey } } });
               }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
@@ -500,6 +859,69 @@ export function SettingsPage() {
           </div>
         )}
       </section>
+    </div>
+  );
+}
+
+
+/** 调休/假期新增：日期 + 类型（放假 / 上周几的课）+ 单双周口径。 */
+function OverrideAdder({ onAdd }: { onAdd: (o: ScheduleOverride) => void }) {
+  const [date, setDate] = useState('');
+  const [kind, setKind] = useState<'OFF' | 'MAKEUP'>('OFF');
+  const [weekday, setWeekday] = useState(5);
+  const [parity, setParity] = useState<'WEEKLY' | 'ODD_WEEK' | 'EVEN_WEEK'>('WEEKLY');
+  return (
+    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', marginTop: 10, flexWrap: 'wrap' }}>
+      <label className="field">
+        <span>日期</span>
+        <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+      </label>
+      <label className="field">
+        <span>类型</span>
+        <select value={kind} onChange={(e) => setKind(e.target.value as 'OFF' | 'MAKEUP')}>
+          <option value="OFF">放假（无课）</option>
+          <option value="MAKEUP">上周几的课</option>
+        </select>
+      </label>
+      {kind === 'MAKEUP' && (
+        <>
+          <label className="field">
+            <span>星期</span>
+            <select value={weekday} onChange={(e) => setWeekday(Number(e.target.value))}>
+              {[1, 2, 3, 4, 5, 6, 7].map((d) => (
+                <option key={d} value={d}>
+                  周{'一二三四五六日'[d - 1]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>单双周</span>
+            <select
+              value={parity}
+              onChange={(e) => setParity(e.target.value as 'WEEKLY' | 'ODD_WEEK' | 'EVEN_WEEK')}
+            >
+              <option value="WEEKLY">只上每周的课</option>
+              <option value="ODD_WEEK">按单周口径</option>
+              <option value="EVEN_WEEK">按双周口径</option>
+            </select>
+          </label>
+        </>
+      )}
+      <button
+        className="btn primary"
+        onClick={() => {
+          if (!date) return;
+          onAdd(
+            kind === 'OFF'
+              ? { date, off: true, label: '放假' }
+              : { date, weekday, recurrence: parity, label: '调休' },
+          );
+          setDate('');
+        }}
+      >
+        添加
+      </button>
     </div>
   );
 }

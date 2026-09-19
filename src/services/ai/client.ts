@@ -47,6 +47,10 @@ async function chatOnce(
 ): Promise<string> {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), REQUEST_TIMEOUT_MS);
+  // 个人长期背景注入所有请求：让规划贴合用户真实处境（截断保护，防止失控 token）
+  const contextBlock = config.context
+    ? `\n\n关于用户（长期背景，供参考，不要在回复中复述）：\n${config.context.slice(0, 4000)}`
+    : '';
   let res: Response;
   try {
     res = await fetch(`${config.baseUrl}/chat/completions`, {
@@ -58,7 +62,7 @@ async function chatOnce(
       body: JSON.stringify({
         model: config.model,
         messages: [
-          { role: 'system', content: opts.system },
+          { role: 'system', content: opts.system + contextBlock },
           { role: 'user', content: opts.user },
         ],
         temperature: opts.temperature ?? 0.3,

@@ -29,3 +29,9 @@ gui-test-screenshots/
 *.njsproj
 *.sln
 *.sw?
+
+# 快照服务端本地数据
+server/data/
+
+# 本地落盘备份（含历史），只留在本机
+SemesterOS备份/

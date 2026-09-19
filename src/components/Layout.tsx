@@ -16,6 +16,7 @@ import { settingsRepo } from '../storage/repositories';
 import { useQuickAdd, useToast, useUndo } from '../store/uiStore';
 import { getWeekInfo, formatDateLong } from '../services/timeService';
 import { QuickAddModals } from './QuickAddModals';
+import { SyncEngine } from './SyncEngine';
 
 function ToastHost() {
   const { message, tone, clear } = useToast();
@@ -116,6 +117,7 @@ export function Layout() {
     <div className="app-shell">
       <ThemeSync />
       <Shortcuts />
+      <SyncEngine />
       <aside className="sidebar">
         <div className="brand">
           SEMESTER OS

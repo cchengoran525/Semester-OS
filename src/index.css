@@ -428,6 +428,11 @@ label.field textarea {
   align-items: center;
   gap: 8px;
   padding: 3px 2px;
+  text-align: left;
+  color: var(--text);
+}
+.modal-task-row input[type='checkbox'] {
+  flex-shrink: 0;
 }
 .modal-task-row .modal-task-title {
   flex: 1;
@@ -435,6 +440,7 @@ label.field textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  cursor: pointer;
 }
 .modal-task-row .modal-task-context {
   flex-shrink: 0;
@@ -920,5 +926,41 @@ label.field textarea {
     padding: 8px 10px;
   }
   .sidebar .brand { padding: 0 8px; }
+  .sidebar .brand small { white-space: nowrap; }
+  /* 竖屏下导航项不再一字一行竖排 */
+  .sidebar .nav-item { white-space: nowrap; flex-shrink: 0; }
   .sidebar .spacer { display: none; }
+
+  /* 看板：4 列等分在手机上每列不到 100px，字变成竖排；
+     改为每列保底可读宽度、整排横向滑动（与日历同款交互） */
+  .kanban {
+    grid-template-columns: repeat(4, minmax(168px, 1fr));
+    overflow-x: auto;
+    padding-bottom: 6px;
+  }
+  .kanban-col { min-height: 160px; }
+
+  /* 日历：每列保底可读宽度，横向滑动（原本 1fr 会被压到 ~120px 也能看，这里更稳） */
+  .calendar-grid {
+    grid-template-columns: repeat(7, minmax(136px, 1fr));
+    overflow-x: auto;
+    padding-bottom: 6px;
+  }
+}
+
+/* 手机竖屏：弹窗里的三列/四列表单会横向截断（时间输入框有最小宽度），
+   统一压成两列；输入框允许收缩。覆盖弹窗内联样式需要 !important。 */
+@media (max-width: 640px) {
+  .modal div[style*='grid-template-columns'] {
+    grid-template-columns: 1fr 1fr !important;
+  }
+  .modal input:not([type='checkbox']):not([type='radio']),
+  .modal select,
+  .modal textarea {
+    min-width: 0;
+    width: 100%;
+  }
+  .modal .actions {
+    flex-wrap: wrap;
+  }
 }

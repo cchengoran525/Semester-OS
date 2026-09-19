@@ -19,6 +19,8 @@ export class SemesterDB extends Dexie {
   weeklyOutcomes!: Table<WeeklyOutcome, string>;
   reviews!: Table<WeeklyReview, string>;
   settings!: Table<Settings, string>;
+  /** 杂项键值（备份目录句柄、同步状态等），不参与业务查询 */
+  meta!: Table<{ key: string; value: unknown }, string>;
 
   constructor() {
     super('semester-os');
@@ -31,6 +33,10 @@ export class SemesterDB extends Dexie {
       weeklyOutcomes: 'id, weekId, status',
       reviews: 'id, weekId',
       settings: 'id',
+    });
+    // v2：新增 meta 表（备份目录句柄 / 同步状态）。纯新增，不影响既有数据。
+    this.version(2).stores({
+      meta: 'key',
     });
   }
 }

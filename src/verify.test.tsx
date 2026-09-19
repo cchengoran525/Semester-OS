@@ -13,11 +13,36 @@ beforeEach(async () => {
 });
 afterEach(cleanup);
 
+describe('验证交互修复', () => {
+  it('总览点待排任务整行 → 打开任务详情弹窗', async () => {
+    const user = userEvent.setup();
+    await repos.taskRepo.create({
+      title: '修复个人网站的登录问题',
+      estimateMinutes: 60,
+      priority: 'HIGH',
+      status: 'READY',
+    });
+    render(<App />);
+    await waitFor(() => expect(screen.getAllByText('数据结构').length).toBeGreaterThan(0));
+    // 课程健康行展开仍然可用（对照）
+    const courseBtn = screen.getAllByRole('button', { name: /数据结构/ })[0];
+    await user.click(courseBtn);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(document.body.textContent).toContain('Understanding Debt');
+    // 对照实验 2：点待排任务行
+    await waitFor(async () => {
+      const targets = screen.getAllByText('修复个人网站的登录问题');
+      await user.click(targets[0]);
+      expect(screen.getByRole('dialog', { name: '任务详情' })).toBeInTheDocument();
+    }, { timeout: 5000 });
+  });
+});
+
 describe('验证本轮三项改动', () => {
   it('1) 侧栏明暗切换：点击后 dataset.theme 翻转', async () => {
     const user = userEvent.setup();
     render(<App />);
-    await waitFor(() => expect(screen.getAllByText('电路基础').length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getAllByText('数据结构').length).toBeGreaterThan(0));
     await waitFor(async () => {
       const btn = screen.getByRole('button', { name: /浅色|深色/ });
       await user.click(btn);
@@ -35,7 +60,7 @@ describe('验证本轮三项改动', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     const user = userEvent.setup();
     render(<App />);
-    await waitFor(() => expect(screen.getAllByText('电路基础').length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getAllByText('数据结构').length).toBeGreaterThan(0));
 
     await user.click(screen.getByRole('link', { name: '设置' }));
     await screen.findByText('数据');
@@ -53,7 +78,7 @@ describe('验证本轮三项改动', () => {
     }, { timeout: 5000 });
     const courses = await db.courses.toArray();
     const projects = await db.projects.toArray();
-    expect(courses.map((c) => c.name)).toContain('电子技术实验');
+    expect(courses.map((c) => c.name)).toContain('大学物理实验');
     expect(courses.length).toBe(8);
     expect(projects.length).toBeGreaterThan(0);
     // 项目只保留名字：描述/里程碑/状态/优先级全部清空
@@ -69,7 +94,7 @@ describe('验证本轮三项改动', () => {
   it('3) 字体档位：设置 fontScale 后应用 --font-scale 变量', async () => {
     const user = userEvent.setup();
     render(<App />);
-    await waitFor(() => expect(screen.getAllByText('电路基础').length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getAllByText('数据结构').length).toBeGreaterThan(0));
     await user.click(screen.getByRole('link', { name: '设置' }));
     await screen.findByText('字体大小');
     await user.selectOptions(screen.getByLabelText('字体大小'), '1.1');

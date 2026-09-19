@@ -140,6 +140,40 @@ export const REVIEW_QUESTIONS: { key: ReviewQuestionKey; text: string }[] = [
   { key: 'nextWeekTop3', text: '下周最重要的 3 件事情？' },
 ];
 
+/**
+ * 教学日历例外：调休上课 / 放假。
+ * - off: true → 这一天没有任何课
+ * - weekday: 这一天按"星期几"的课表上课（如周日上周五的课）
+ * - recurrence: 调休时采用单双周口径（默认只上每周的课）
+ */
+export interface ScheduleOverride {
+  date: string; // yyyy-MM-dd
+  off?: boolean;
+  weekday?: number; // 1 = Monday … 7 = Sunday
+  recurrence?: Recurrence;
+  label?: string;
+}
+
+/**
+ * 备份与同步：
+ * - 本地落盘备份（File System Access API，写到你自己选的文件夹）
+ * - 自建服务器快照同步（PUT/GET /snapshot，last-write-wins）
+ */
+export interface SyncSettings {
+  /** 服务器地址，如 https://example.com/semester-os */
+  url?: string;
+  /** Bearer 令牌（可选，服务器端自行校验） */
+  token?: string;
+  /** 数据变更后自动写本地文件夹 */
+  autoBackup?: boolean;
+  /** 数据变更后自动推送到服务器 */
+  autoSync?: boolean;
+  /** 最后一次同步成功时间（ISO） */
+  lastSyncedAt?: string;
+  /** 本机标识，冲突记录用 */
+  deviceId?: string;
+}
+
 export interface Settings {
   id: 'app';
   semesterStart: string; // yyyy-MM-dd
@@ -151,6 +185,10 @@ export interface Settings {
   theme: 'DARK' | 'LIGHT' | 'SYSTEM';
   /** 全局字体缩放（zoom），1 = 标准。可选，向后兼容。 */
   fontScale?: number;
+  /** 调休 / 放假例外表。可选，向后兼容。 */
+  scheduleOverrides?: ScheduleOverride[];
+  /** 备份与同步配置。可选，向后兼容。 */
+  sync?: SyncSettings;
   initialized: boolean;
   /** 自定义路线图备注，key = "2026-09" 月份标签。可选，向后兼容。 */
   roadmapNotes?: Record<string, string>;
@@ -164,6 +202,12 @@ export interface Settings {
     baseUrl: string;
     apiKey: string;
     model: string;
+    /**
+     * 个人长期背景（可选）：用户是谁、在做什么项目、长期目标。
+     * 注入所有 AI 请求的 system prompt，让规划贴合真实处境。
+     * 只存本地，导出 JSON 时会剥离。
+     */
+    context?: string;
     /**
      * 深度模型（周计划等深度规划），可选。逐字段回落到快速模型：
      * 只填模型名 = 同 Key 同地址换个更强的模型。

@@ -21,15 +21,17 @@ describe('Semester OS App', () => {
       { timeout: 15000 },
     );
     await waitFor(() =>
-      expect(screen.getAllByText('电路基础').length).toBeGreaterThan(0),
+      expect(screen.getAllByText('数据结构').length).toBeGreaterThan(0),
     );
-    expect(screen.getAllByText(/AS \/ Aeroshield/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/进行中项目/).length).toBeGreaterThan(0);
+    // 项目只保留名字（待启动），从库里断言存在
+    const projects = await repos.projectRepo.list();
+    expect(projects.map((x) => x.name)).toContain('课程大作业');
   });
 
   it('dashboard reflects newly created tasks (live query)', async () => {
     render(<App />);
-    await waitFor(() => expect(screen.getAllByText('电路基础').length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getAllByText('数据结构').length).toBeGreaterThan(0));
 
     await repos.taskRepo.create({
       title: 'UI 集成测试任务',
@@ -45,14 +47,16 @@ describe('Semester OS App', () => {
 
   it('persists a created task across a fresh render (refresh simulation)', async () => {
     const { unmount } = render(<App />);
-    await waitFor(() => expect(screen.getAllByText('电路基础').length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getAllByText('数据结构').length).toBeGreaterThan(0));
     await repos.taskRepo.create({
       title: '刷新后仍在的任务',
       estimateMinutes: 30,
       priority: 'MEDIUM',
       status: 'READY',
     });
-    await waitFor(() => expect(screen.getByText('刷新后仍在的任务')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getAllByText('刷新后仍在的任务').length).toBeGreaterThan(0),
+    );
     unmount();
 
     // New render = new React tree reading from the same IndexedDB

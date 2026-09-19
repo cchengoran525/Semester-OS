@@ -1,13 +1,14 @@
 import { afterEach, describe, expect, it, beforeEach } from 'vitest';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { BLOCK_TYPE_LABELS } from './domain/types';
 import App from './App';
 import { db } from './storage/db';
 import { seedIfFirstLaunch } from './storage/seed';
 import * as repos from './storage/repositories';
 import { handleTaskDrop, handleTaskUnschedule, removeBlockWithUndo } from './services/dropActions';
 import { scheduleBlocksForDate } from './services/scheduleService';
-import { toISODate, todayDate } from './services/timeService';
+import { getWeekInfo, toISODate, todayDate } from './services/timeService';
 
 /**
  * 使用工作流模拟：按真实使用顺序走一遍核心闭环 ——
@@ -22,6 +23,18 @@ beforeEach(async () => {
   window.location.hash = '';
   await Promise.all(db.tables.map((t) => t.clear()));
   await seedIfFirstLaunch();
+  // 测试夹具：应用种子已不含示例任务/成果，这里按需注入（仅测试环境）
+  const now = new Date().toISOString();
+  await db.tasks.bulkPut([
+    { id: 't1', title: '完成课程大作业的开题调研', projectId: 'p1', estimateMinutes: 90, priority: 'HIGH', status: 'READY', createdAt: now, notes: '注意覆盖老师强调的三个考点。' },
+    { id: 't2', title: '修复个人网站的登录问题', projectId: 'p2', estimateMinutes: 60, priority: 'HIGH', status: 'READY', createdAt: now },
+    { id: 't3', title: '整理数据结构第一章例题', courseId: 'c6', estimateMinutes: 45, priority: 'MEDIUM', status: 'READY', createdAt: now },
+    { id: 't4', title: '线性代数：补齐第 2 章未理解部分', courseId: 'c2', estimateMinutes: 90, priority: 'MEDIUM', status: 'BACKLOG', createdAt: now },
+    { id: 't5', title: '数据结构 2.3 节习题 8/11/15', courseId: 'c5', estimateMinutes: 45, priority: 'MEDIUM', status: 'READY', createdAt: now },
+  ]);
+  await db.weeklyOutcomes.bulkPut([
+    { id: 'wo1', weekId: getWeekInfo(todayDate()).id, title: '完成课程大作业开题报告初稿', linkedTaskIds: ['t1'], status: 'OPEN' },
+  ]);
 });
 
 afterEach(cleanup);
@@ -49,16 +62,17 @@ async function adoptSuggestion(user: ReturnType<typeof userEvent.setup>) {
   const panel = suggestionPanel();
   const before = (await repos.blockRepo.list()).length;
   const firstAdopt = within(panel).getAllByRole('button', { name: '采纳' })[0];
-  const title =
-    firstAdopt.closest('.row-item')?.querySelector('strong')?.textContent ??
-    '';
   await user.click(firstAdopt);
   await expectToast(/已开时间块/);
   const blocks = await repos.blockRepo.list();
   expect(blocks.length).toBe(before + 1);
   const adopted = blocks.find((b) => b.source === 'SUGGESTED');
   expect(adopted).toBeDefined();
-  return { title, adoptedBlock: adopted! };
+  // 从落库结果反推期望文案与任务标题（DOM 可能在重渲染中变化，不作为事实来源）
+  const block = adopted!;
+  const label = `${BLOCK_TYPE_LABELS[block.type]}块 · ${block.start.slice(5, 10)} ${block.start.slice(11, 16)}–${block.end.slice(11, 16)}`;
+  const task = await repos.taskRepo.get(block.taskIds[0]);
+  return { title: label, taskTitle: task?.title ?? '', adoptedBlock: block };
 }
 
 describe('使用工作流模拟', () => {
@@ -71,11 +85,11 @@ describe('使用工作流模拟', () => {
 
     await user.type(
       screen.getByPlaceholderText(/例如：/),
-      '给 AS 折叠机构做干涉检查',
+      '完成课程大作业的文献调研',
     );
     await user.selectOptions(
       within(dialog).getAllByRole('combobox')[0],
-      'AS / Aeroshield',
+      '课程大作业',
     );
     await user.click(within(dialog).getByRole('button', { name: '保存' }));
 
@@ -83,9 +97,9 @@ describe('使用工作流模拟', () => {
     await waitFor(() =>
       expect(screen.queryByRole('dialog', { name: '新建任务' })).toBeNull(),
     );
-    expect(screen.getAllByText('给 AS 折叠机构做干涉检查').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('完成课程大作业的文献调研').length).toBeGreaterThan(0);
     const created = (await repos.taskRepo.list()).find(
-      (t) => t.title === '给 AS 折叠机构做干涉检查',
+      (t) => t.title === '完成课程大作业的文献调研',
     );
     expect(created).toMatchObject({
       status: 'READY',
@@ -95,18 +109,24 @@ describe('使用工作流模拟', () => {
     });
   });
 
-  it('采纳排课建议 → 生成 SUGGESTED 时间块进入今日安排，且同一任务不再被重复建议', async () => {
+  it('采纳排课建议 → 生成 SUGGESTED 时间块且绝不排在过去，同一任务不再被重复建议', async () => {
     const user = userEvent.setup();
     await renderApp();
 
-    const { title, adoptedBlock } = await adoptSuggestion(user);
+    const { title, taskTitle, adoptedBlock } = await adoptSuggestion(user);
     expect(adoptedBlock.taskIds.length).toBe(1);
 
-    // 时间块出现在「今日安排」（卡片里是 “□ 标题” 两个文本节点，用正则匹配）
-    const todayPanel = screen.getByTestId('today-panel');
-    await waitFor(() =>
-      expect(within(todayPanel).getByText(/修正跟随延迟/)).toBeInTheDocument(),
-    );
+    // 建议可以落在今天或之后某天（例如晚上运行时今天已无未来空闲窗口），
+    // 但绝不允许落在过去；若落在今天，必须出现在「今日安排」。
+    const blockDate = adoptedBlock.start.slice(0, 10);
+    const todayISO = toISODate(todayDate());
+    expect(blockDate >= todayISO).toBe(true);
+    if (blockDate === todayISO) {
+      const todayPanel = screen.getByTestId('today-panel');
+      await waitFor(() =>
+        expect(within(todayPanel).getByText(taskTitle)).toBeInTheDocument(),
+      );
+    }
 
     // 回归优化点：已排入时间块的任务不应再次出现在建议里
     await waitFor(() => {
@@ -126,8 +146,8 @@ describe('使用工作流模拟', () => {
     const dialog = await screen.findByRole('dialog', { name: '新建时间块' });
 
     // 默认 14:00–16:00 深度工作；下拉框顺序：类型(0)、关联内容(1)、精力(2)
-    await user.selectOptions(within(dialog).getAllByRole('combobox')[1], '电路基础');
-    await user.click(within(dialog).getByText('电路基础 2.3 节习题 8/11/15'));
+    await user.selectOptions(within(dialog).getAllByRole('combobox')[1], '数据结构');
+    await user.click(within(dialog).getByText('数据结构 2.3 节习题 8/11/15'));
     await user.click(within(dialog).getByRole('button', { name: '保存' }));
 
     const t5 = await repos.taskRepo.get('t5');
@@ -139,14 +159,16 @@ describe('使用工作流模拟', () => {
     expect(userBlocks[0].taskIds).toContain('t5');
     expect(userBlocks[0].plannedMinutes).toBe(120);
 
-    // 冲突校验：同一默认时段再建一块应被拒绝且不落库
+    // 冲突是软限制：同一时段再建一块 → 允许保存，仅提醒重叠
     await user.click(screen.getByRole('button', { name: /时间块 B/ }));
     const dialog2 = await screen.findByRole('dialog', { name: '新建时间块' });
     await user.click(within(dialog2).getByRole('button', { name: '保存' }));
-    await expectToast(/时间冲突/);
+    await waitFor(() =>
+      expect(screen.getAllByText(/重叠/).length).toBeGreaterThan(0),
+    );
     expect(
       (await repos.blockRepo.list()).filter((b) => b.source === 'USER').length,
-    ).toBe(1);
+    ).toBe(2);
   });
 
   it('拖拽任务到日历日（handleTaskDrop）→ 在最大空闲窗口生成时间块', async () => {
@@ -190,7 +212,7 @@ describe('使用工作流模拟', () => {
     await screen.findByText('待排任务').catch(() => {});
 
     // 打开 t2 详情，记录实际用时 75 分钟并完成
-    await user.click(screen.getAllByText('给 Shadowcarrier 修正跟随延迟')[0]);
+    await user.click(screen.getAllByText('修复个人网站的登录问题')[0]);
     const dialog = await screen.findByRole('dialog', { name: '任务详情' });
     await user.type(within(dialog).getByPlaceholderText('留空 = 不记录'), '75');
     await user.click(within(dialog).getByRole('button', { name: '完成' }));
@@ -222,10 +244,10 @@ describe('使用工作流模拟', () => {
     await screen.findByText('每周复盘');
 
     const textareas = screen.getAllByRole('textbox');
-    await user.type(textareas[0], '完成了 AS 中翼舵机安装座 CAD v0.3');
+    await user.type(textareas[0], '完成了课程大作业的开题调研');
     await user.type(
       textareas[textareas.length - 1],
-      '1. AS 干涉检查 2. Shadowcarrier 延迟 3. 信号复习',
+      '1. 开题调研 2. 网站登录修复 3. 数据结构复习',
     );
 
     // 自动保存：防抖后落库，无需任何保存动作
@@ -233,8 +255,8 @@ describe('使用工作流模拟', () => {
       expect(await db.reviews.toArray()).toHaveLength(1);
     }, { timeout: 5000 });
     const saved = (await db.reviews.toArray())[0];
-    expect(saved.answers.advanced).toContain('CAD v0.3');
-    expect(saved.answers.nextWeekTop3).toContain('干涉检查');
+    expect(saved.answers.advanced).toContain('开题调研');
+    expect(saved.answers.nextWeekTop3).toContain('开题调研');
 
     // 清空即时生效（直接落库为空）
     await user.click(screen.getByRole('button', { name: '清空' }));
@@ -248,7 +270,7 @@ describe('使用工作流模拟', () => {
     await useUndo.getState().undo();
     await waitFor(async () => {
       const list = await db.reviews.toArray();
-      expect(list[0]?.answers.advanced ?? '').toContain('CAD v0.3');
+      expect(list[0]?.answers.advanced ?? '').toContain('开题调研');
     }, { timeout: 5000 });
 
     // 重新进入页面后答案回显
@@ -257,7 +279,7 @@ describe('使用工作流模拟', () => {
     await screen.findByText('每周复盘');
     await waitFor(() =>
       expect(screen.getAllByRole('textbox')[0]).toHaveValue(
-        '完成了 AS 中翼舵机安装座 CAD v0.3',
+        '完成了课程大作业的开题调研',
       ),
     );
   });

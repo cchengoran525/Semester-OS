@@ -26,6 +26,19 @@ export const settingsRepo = {
   async get(): Promise<Settings | undefined> {
     return db.settings.get('app');
   },
+  /**
+   * 合并式更新 sync 配置：始终以库中最新值为基底，
+   * 避免"基于旧渲染的展开"把刚填的字段覆盖掉。
+   */
+  async patchSync(patch: Partial<NonNullable<Settings['sync']>>): Promise<void> {
+    const current = await db.settings.get('app');
+    const base = current?.sync ?? {};
+    const next = { ...base };
+    for (const [k, v] of Object.entries(patch) as [keyof typeof base, never][]) {
+      if (v !== undefined) (next as Record<string, unknown>)[k] = v;
+    }
+    await db.settings.update('app', { sync: next });
+  },
   async save(patch: Partial<Settings>): Promise<Settings> {
     const current =
       (await db.settings.get('app')) ?? defaultSettings();

@@ -34,7 +34,8 @@ export async function exportAll(): Promise<string> {
       blocks,
       weeklyOutcomes,
       reviews,
-      settings: settings ?? null,
+      // 剥离 AI 配置（API Key、个人背景）：敏感信息不出设备，换机器后重新填写
+      settings: settings ? { ...settings, ai: undefined } : null,
     },
   };
   return JSON.stringify(bundle, null, 2);

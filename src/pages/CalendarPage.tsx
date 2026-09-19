@@ -11,20 +11,18 @@ import {
 import { addWeeks } from 'date-fns';
 import { useApp } from '../components/AppProvider';
 import { BlockCard, DropDay, DropZone, EmptyState, TaskRow } from '../components/common';
+import { BlockDetailModal } from '../components/BlockDetailModal';
+import { TaskDetailModal } from '../components/TaskDetailModal';
 import { makeLabelResolver } from '../components/labels';
 import * as repos from '../storage/repositories';
 import { useToast } from '../store/uiStore';
 import type { Block, Task } from '../domain/types';
-import { BLOCK_SOURCE_LABELS } from '../domain/types';
 import { blocksOnDate, isCurrentBlock, openUnscheduledTasks } from '../services/statistics';
 import { scheduleBlocksForRange } from '../services/scheduleService';
 import { findConflicts } from '../services/scheduler';
 import {
-  atTime,
   daysOfWeek,
   getWeekInfo,
-  minutesBetween,
-  toISODateTime,
   todayDate,
   toISODate,
 } from '../services/timeService';
@@ -51,6 +49,7 @@ export function CalendarPage() {
   const [weekOffset, setWeekOffset] = useState(0);
   const [draggingTask, setDraggingTask] = useState<Task | null>(null);
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
+  const [detailTask, setDetailTask] = useState<Task | null>(null);
 
   const labels = useMemo(() => makeLabelResolver(projects, courses), [projects, courses]);
   const weekStartsOn = settings?.weekStartDay ?? 1;
@@ -73,10 +72,6 @@ export function CalendarPage() {
 
   const allThisWeek = useMemo(() => [...blocks, ...sched], [blocks, sched]);
   const conflicts = useMemo(() => findConflicts(allThisWeek), [allThisWeek]);
-  const conflictIds = useMemo(
-    () => new Set(conflicts.flatMap((c) => [c.a.id, c.b.id])),
-    [conflicts],
-  );
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
@@ -137,26 +132,6 @@ export function CalendarPage() {
 
   const selectedBlock = selectedBlockId ? blocks.find((b) => b.id === selectedBlockId) : null;
 
-  const updateBlockTime = async (block: Block, startTime: string, endTime: string) => {
-    if (endTime <= startTime) {
-      show('结束时间需要晚于开始时间', 'error');
-      return;
-    }
-    await repos.blockRepo.update(block.id, {
-      start: atTime(block.start.slice(0, 10), startTime),
-      end: atTime(block.start.slice(0, 10), endTime),
-    });
-  };
-
-  // 改开始时间 → 保持时长，结束时间自动平移（Planka 式，不与结束时间打架）
-  const shiftBlockStart = async (block: Block, startTime: string) => {
-    if (!startTime) return;
-    const duration = minutesBetween(block.start, block.end);
-    const newStart = atTime(block.start.slice(0, 10), startTime);
-    const newEnd = toISODateTime(new Date(new Date(newStart).getTime() + duration * 60000));
-    await repos.blockRepo.update(block.id, { start: newStart, end: newEnd });
-  };
-
   return (
     <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd}>
       <div className="page-header">
@@ -188,10 +163,22 @@ export function CalendarPage() {
                 dateISO={dateISO}
                 className={`calendar-day ${dateISO === todayISO ? 'today' : ''}`}
               >
-                <div className="day-head">
-                  <span>{DAY_NAMES[(d.getDay() + 6) % 7]}</span>
-                  <span>{dateISO.slice(5)}</span>
-                </div>
+                {(() => {
+                  const ov = settings?.scheduleOverrides?.find((o) => o.date === dateISO);
+                  return (
+                    <div className="day-head">
+                      <span>{DAY_NAMES[(d.getDay() + 6) % 7]}</span>
+                      <span style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                        {ov && (
+                          <span className="tag" style={{ padding: '0 4px' }}>
+                            {ov.off ? '休' : '调'}
+                          </span>
+                        )}
+                        {dateISO.slice(5)}
+                      </span>
+                    </div>
+                  );
+                })()}
                 {dayBlocks.length === 0 && dateISO === todayISO && (
                   <div className="faint small" style={{ padding: '4px 0' }}>
                     拖任务到这里
@@ -244,6 +231,7 @@ export function CalendarPage() {
                 task={t}
                 contextLabel={labels.taskContext(t)}
                 draggable
+                onClick={() => setDetailTask(t)}
                 onToggle={() =>
                   t.status === 'DONE'
                     ? repos.taskRepo.reopen(t.id)
@@ -256,81 +244,10 @@ export function CalendarPage() {
       </DropZone>
 
       {selectedBlock && (
-            <section className="panel" style={{ marginTop: 14 }}>
-              <h2>时间块详情</h2>
-              <div className="mono muted" style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                <input
-                  type="time"
-                  value={selectedBlock.start.slice(11, 16)}
-                  onChange={(e) => shiftBlockStart(selectedBlock, e.target.value)}
-                  aria-label="开始时间"
-                />
-                <span>–</span>
-                <input
-                  type="time"
-                  value={selectedBlock.end.slice(11, 16)}
-                  onChange={(e) => updateBlockTime(selectedBlock, selectedBlock.start.slice(11, 16), e.target.value)}
-                  aria-label="结束时间"
-                />
-                <span>· {minutesBetween(selectedBlock.start, selectedBlock.end)} 分钟</span>
-              </div>
-              <div className="small" style={{ margin: '6px 0' }}>
-                {labels.contextLabel(selectedBlock.context)}
-              </div>
-              <div className="small muted">
-                精力：{selectedBlock.energy ?? '—'} / 5 · 来源：{BLOCK_SOURCE_LABELS[selectedBlock.source]}
-              </div>
-              <ul style={{ paddingLeft: 18, marginTop: 8 }} className="small">
-                {selectedBlock.taskIds.map((id) => {
-                  const t = taskById.get(id);
-                  return t ? (
-                    <li key={id} style={{ marginBottom: 4 }}>
-                      {t.status === 'DONE' ? '☑' : '□'} {t.title}{' '}
-                      <button
-                        className="btn small subtle"
-                        onClick={() => repos.blockRepo.detachTask(selectedBlock.id, id)}
-                      >
-                        移出
-                      </button>
-                      {t.status !== 'DONE' && (
-                        <button
-                          className="btn small"
-                          style={{ marginLeft: 4 }}
-                          onClick={() => repos.taskRepo.complete(t.id, minutesBetween(selectedBlock.start, selectedBlock.end))}
-                        >
-                          完成
-                        </button>
-                      )}
-                    </li>
-                  ) : null;
-                })}
-              </ul>
-              <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
-                <button
-                  className="btn small"
-                  onClick={() => repos.blockRepo.update(selectedBlock.id, { status: 'DONE', actualMinutes: minutesBetween(selectedBlock.start, selectedBlock.end) })}
-                >
-                  完成时间块（记录实际时长）
-                </button>
-                <button
-                  className="btn small danger"
-                  onClick={async () => {
-                    const res = await removeBlockWithUndo(selectedBlock);
-                    push({ label: res.message, undo: res.undo });
-                    setSelectedBlockId(null);
-                    show(`${res.message} · ⌘Z 可撤销`);
-                  }}
-                >
-                  删除
-                </button>
-              </div>
-              {conflictIds.has(selectedBlock.id) && (
-                <div className="warning-banner" style={{ marginTop: 10 }}>
-                  此时间块与其他时间块重叠。
-                </div>
-              )}
-            </section>
-          )}
+        <BlockDetailModal block={selectedBlock} onClose={() => setSelectedBlockId(null)} />
+      )}
+
+      {detailTask && <TaskDetailModal task={detailTask} onClose={() => setDetailTask(null)} />}
 
       <DragOverlay dropAnimation={null}>
         {draggingTask ? (

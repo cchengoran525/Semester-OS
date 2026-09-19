@@ -2,10 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { addWeeks } from 'date-fns';
 import { useApp } from '../components/AppProvider';
 import { EmptyState, HealthDot, AIThinking } from '../components/common';
+import { TaskDetailModal } from '../components/TaskDetailModal';
 import { makeLabelResolver } from '../components/labels';
 import * as repos from '../storage/repositories';
 import { useToast, useUndo } from '../store/uiStore';
-import { BLOCK_TYPE_LABELS, HEALTH_LABELS, REVIEW_QUESTIONS, type ReviewQuestionKey } from '../domain/types';
+import { BLOCK_TYPE_LABELS, HEALTH_LABELS, REVIEW_QUESTIONS, type ReviewQuestionKey, type Task } from '../domain/types';
 import { attentionAllocation, deepWorkBreakdown, filterBlocks } from '../services/statistics';
 import { atTime, durationLabel, formatDateShort, getWeekInfo, todayDate } from '../services/timeService';
 import { courseWarnings, debtSummary } from '../services/courseService';
@@ -20,6 +21,7 @@ export function ReviewPage() {
   const [answers, setAnswers] = useState<Partial<Record<ReviewQuestionKey, string>>>({});
   const [loadedWeekId, setLoadedWeekId] = useState<string | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
+  const [detailTask, setDetailTask] = useState<Task | null>(null);
   const aiCfg = aiConfig(settings);
 
   const week = useMemo(
@@ -237,7 +239,13 @@ export function ReviewPage() {
               </div>
               <div className="sticky-strip">
                 {completedTasks.map((t) => (
-                  <div key={t.id} className="sticky-note">
+                  <div
+                    key={t.id}
+                    className="sticky-note"
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => setDetailTask(t)}
+                    title="点击查看/编辑任务详情"
+                  >
                     <div className="sticky-title">☑ {t.title}</div>
                     <div className="mono small">
                       {labels.taskContext(t) ?? '未关联'}
@@ -332,6 +340,8 @@ export function ReviewPage() {
           </span>
         </div>
       </section>
+
+      {detailTask && <TaskDetailModal task={detailTask} onClose={() => setDetailTask(null)} />}
     </div>
   );
 }

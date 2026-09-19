@@ -20,11 +20,13 @@ describe('seed', () => {
 
     const courses = await repos.courseRepo.list();
     const projects = await repos.projectRepo.list();
-    expect(courses.map((c) => c.name)).toContain('电路基础');
-    expect(courses.map((c) => c.name)).toContain('信号与线性系统分析');
-    expect(projects.map((p) => p.name)).toContain('AS / Aeroshield');
-    expect(projects.map((p) => p.name)).toContain('Smart Glasses');
-    expect(projects.filter((p) => p.status === 'ACTIVE')).toHaveLength(2); // WIP 合法
+    expect(courses.map((c) => c.name)).toContain('数据结构');
+    expect(courses.map((c) => c.name)).toContain('操作系统');
+    expect(projects.map((p) => p.name)).toContain('课程大作业');
+    expect(projects.map((p) => p.name)).toContain('个人网站');
+    expect(projects.filter((p) => p.status === 'ACTIVE')).toHaveLength(0); // 只留名字，全部待启动
+    expect(await repos.milestoneRepo.list()).toHaveLength(0); // 里程碑由用户自建
+    expect(await repos.taskRepo.list()).toHaveLength(0); // 无示例任务
 
     // Second launch must NOT re-seed (would wipe user edits)
     const course = courses[0];
@@ -39,7 +41,7 @@ describe('seed', () => {
 describe('task & block workflow', () => {
   it('create → assign to block → complete → reschedule', async () => {
     const task = await repos.taskRepo.create({
-      title: '给 AS 中翼舵机安装座建立 v0.3 CAD',
+      title: '完成课程大作业的开题调研',
       projectId: 'p1',
       estimateMinutes: 90,
       priority: 'HIGH',
@@ -126,5 +128,17 @@ describe('import / export', () => {
     expect(() =>
       parseImport('{"schemaVersion":1,"data":{"courses":[{}],"projects":[],"milestones":[],"tasks":[],"blocks":[],"weeklyOutcomes":[],"reviews":[]}}'),
     ).toThrow(/缺少字段/);
+  });
+
+  it('strips AI config (key / personal context) from exports', async () => {
+    await seedIfFirstLaunch();
+    await repos.settingsRepo.save({
+      ai: { baseUrl: 'https://x.test', apiKey: 'sk-secret', model: 'm', context: '我的背景' },
+    });
+    const json = await exportAll();
+    expect(json).not.toContain('sk-secret');
+    expect(json).not.toContain('我的背景');
+    const bundle = parseImport(json);
+    expect(bundle.data.settings?.ai).toBeUndefined();
   });
 });

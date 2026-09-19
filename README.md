@@ -52,7 +52,7 @@ npm install
 npm run dev      # http://localhost:5173
 ```
 
-首次打开会自动录入 seed 数据（真实课程表 + 6 个项目），之后不会再覆盖你的数据。
+首次打开会自动录入演示数据（一套示例课程表 + 6 个示例项目，都可在应用内随意修改），之后不会再覆盖你的数据。
 
 ## Deployment（通用化部署）
 
@@ -99,6 +99,30 @@ npm run test        # vitest（单元 + 集成 + UI 测试）
 
 Settings → Data → Export JSON / Import JSON。导入会先解析校验（schema 版本、必填字段），
 确认后覆盖写入。
+
+## Backup & Sync（备份与同步）
+
+数据在浏览器 IndexedDB 里，清站点数据会一起丢失。设置页提供两条互补的保险：
+
+1. **落盘备份**（File System Access API，Chrome/Edge）
+   选择一次本地文件夹，之后数据变更 3 秒内自动写出 `semester-os.json`，
+   并按天留档到 `history/YYYY-MM-DD.json`。清浏览器数据也不影响这些文件。
+2. **服务器同步**（自建）
+   填服务器地址（可选令牌），整库快照 `PUT /snapshot`，应用启动时比对拉取，
+   last-write-wins；覆盖本地前会先落一份本地快照。变更后 3 秒内自动推送。
+
+参考服务端（零依赖 Node）：
+
+```bash
+TOKEN=你的令牌 PORT=8787 node server/snapshot-server.mjs
+# 或 node server/snapshot-server.mjs --token=xxx --port=8787 --data=./data
+```
+
+- `GET /health` 健康检查；`GET /snapshot` 取最新快照；`PUT /snapshot` 覆盖保存（Bearer 校验）
+- 存储：`data/snapshot.json` + `data/history/<时间戳>.json`（保留最近 200 份）
+
+部署到自己的服务器/内网后，把地址填进 设置 → 备份与同步 即可；
+如果服务器只在内网，手机等外部设备需要 VPN 或反向代理。
 
 ## Environment Variables
 
@@ -154,21 +178,38 @@ AI 集成在 `src/services/ai/`，走 **OpenAI 兼容协议**（`/chat/completio
   未配置即停用；`deepAIConfig()` 做逐字段回落解析
 - `client.ts`   兼容客户端（Bearer 认证），`probe()` 三态探测，`extractJSON()`
   剥围栏解析；180s 超时；服务不支持 `response_format` / `reasoning_effort`
-  时自动降级重试；content 为空时兜底取推理模型的 `reasoning_content`
+  时自动降级重试；content 为空时兜底取推理模型的 `reasoning_content`；
+  **个人长期背景**（`settings.ai.context`）自动追加到所有请求的 system prompt
 - `prompts.ts`  提示词调教：把「只建议不修改、注意力经济、不制造焦虑」的产品
   哲学写进 system prompt，每个能力单独约束输出 JSON 格式
-- `features.ts` 四个能力：任务拆解 / 周复盘起草 / 周简报 / 一键周计划，输出经
-  白名单校验与夹取（预估就近取 15–180 分钟档、优先级回落 MEDIUM、丢弃无效条目、
-  排期裁剪进空闲窗口并去重叠）才进 UI
+- `features.ts` 五个能力：任务拆解 / 周复盘起草 / 计划对照 / 一键周计划
+  （另有一个已删除的旧"简报"能力），输出经白名单校验与夹取（预估就近取
+  15–180 分钟档、优先级回落 MEDIUM、丢弃无效条目、排期裁剪进空闲窗口并去重叠）
+  才进 UI
 
-三个功能入口（均需先在 设置 → AI 助手 配置，Key 只存本地 IndexedDB）：
+四个功能入口（均需先在 设置 → AI 助手 配置，Key 只存本地 IndexedDB）：
 
 - 项目卡片展开 → **AI 拆解任务**：生成建议子任务，勾选后导入为「待定」任务
 - 每周复盘 → **AI 起草**：基于本周真实数据起草五个复盘问题，AI 只填草稿，
   用户核对修改后才保存
-- 总览 → **AI 周计划**：未来 7 天空闲窗口 + 待排任务整体排期，每条带理由，
-  勾选采纳后创建 SUGGESTED 时间块（支持 ⌘Z 整体撤销）
-- 总览 → **AI 简报**：把下周排课建议、空闲窗口、风险汇总成一段话
+- 总览 → **AI 周计划**（深度模型）：先给出未来 7 天的**焦点与取舍**，再给排期
+  草稿；输入包含本周目标（Outcomes）、进行中项目的当前里程碑、课程债务，
+  reason 要求说明"为什么是它、因此暂缓了什么"。勾选采纳后创建 SUGGESTED 块
+- 总览 → **AI 对照 · 计划 vs 实际**：不做数据汇总，只对照"本周设定的目标"与
+  "实际投入的时间块"，指出 1–2 条最值得注意的偏离（例如目标写了却 0 分钟投入），
+  计划与实际一致时明说没有偏离
+
+**排期不落在过去**：所有窗口计算（下一步建议 / 今日空闲 / AI 周计划）都以
+`services/planning.ts` 的 `collectUpcomingWindows` 为准——今天的窗口从"现在"
+向上取整到下一个 15 分钟开始，已过 22:00 则今天不再产生窗口。
+
+**本周目标（Outcomes）**：总览页「本周成果」可直接添加/删除，它是 AI 周计划定
+焦点、AI 对照找偏离的数据来源。
+
+**个人长期背景**：设置 → AI 助手 → 「个人长期背景」可写入身份、项目与长期目标
+（例如在做的项目与长期计划），所有 AI 请求自动携带——周计划
+据此定焦点、对照据此判断偏离。该字段与 API Key 均只存本地 IndexedDB，导出 JSON
+时会剥离。
 
 AI 只在用户点击时把当次所需的摘要数据发给所配置的服务，任何输出都不会
 自动修改本地数据。

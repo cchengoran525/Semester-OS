@@ -5,6 +5,7 @@ import { milestoneProgress, wipStatus } from './projectService';
 import { attentionAllocation, deepWorkBreakdown, estimateVsActual, openUnscheduledTasks, taskCounts } from './statistics';
 import { conflictsWith, findConflicts, freeWindows, rankTasks } from './scheduler';
 import { minutesBetween } from './timeService';
+import { scheduleBlocksForDate } from './scheduleService';
 import { handleTaskUnschedule, shiftBlockToDay } from './dropActions';
 
 const noDebt = { understanding: 0, assignment: 0, review: 0, exam: 0 };
@@ -76,13 +77,13 @@ describe('statistics', () => {
 
   it('deep work counts DEEP_WORK and ENGINEERING grouped by context', () => {
     const blocks = [
-      mkBlock('2026-09-03T14:00:00', '2026-09-03T16:00:00', 'DEEP_WORK', 'AS'),
+      mkBlock('2026-09-03T14:00:00', '2026-09-03T16:00:00', 'DEEP_WORK', 'p1'),
       mkBlock('2026-09-03T19:00:00', '2026-09-03T21:00:00', 'ENGINEERING', 'SC'),
       mkBlock('2026-09-03T10:00:00', '2026-09-03T11:00:00', 'ADMIN'),
     ];
     const dw = deepWorkBreakdown(blocks);
     expect(dw.totalMinutes).toBe(240);
-    expect(dw.byContext.AS).toBe(120);
+    expect(dw.byContext.p1).toBe(120);
     expect(dw.byContext.SC).toBe(120);
   });
   it('prefers actualMinutes when present', () => {
@@ -157,6 +158,46 @@ describe('dropActions', () => {
   });
 });
 
+describe('教学日历例外（调休 / 放假）', () => {
+  const noDebt2 = { understanding: 0, assignment: 0, review: 0, exam: 0 };
+  const courses: Course[] = [
+    {
+      id: 'c1', name: '周五每周课', health: 'GREEN', debt: noDebt2,
+      schedule: [{ weekday: 5, startTime: '10:20', endTime: '12:10', recurrence: 'WEEKLY' }],
+    },
+    {
+      id: 'c2', name: '周五双周课', health: 'GREEN', debt: noDebt2,
+      schedule: [{ weekday: 5, startTime: '08:00', endTime: '09:50', recurrence: 'EVEN_WEEK' }],
+    },
+  ];
+  const semStart = '2026-09-07';
+
+  it('放假当天没有任何课', () => {
+    const blocks = scheduleBlocksForDate(new Date('2026-09-25T00:00:00'), courses, {
+      semesterStart: semStart,
+      scheduleOverrides: [{ date: '2026-09-25', off: true }],
+    });
+    expect(blocks).toHaveLength(0);
+  });
+
+  it('调休按指定星期几上课，且单双周口径生效', () => {
+    // 2026-09-20 是周日，调休上周五（单周口径）→ 只上每周的那门，双周课不上
+    const blocks = scheduleBlocksForDate(new Date('2026-09-20T00:00:00'), courses, {
+      semesterStart: semStart,
+      scheduleOverrides: [{ date: '2026-09-20', weekday: 5, recurrence: 'ODD_WEEK' }],
+    });
+    expect(blocks.map((b) => b.context)).toEqual(['c1']);
+    expect(blocks[0].start.slice(0, 10)).toBe('2026-09-20');
+  });
+
+  it('无例外时按常规课表（周日无课）', () => {
+    const blocks = scheduleBlocksForDate(new Date('2026-09-20T00:00:00'), courses, {
+      semesterStart: semStart,
+    });
+    expect(blocks).toHaveLength(0);
+  });
+});
+
 describe('scheduler', () => {
   it('detects overlapping blocks', () => {
     const a: Block = { id: 'a', start: '2026-09-03T14:00:00', end: '2026-09-03T16:00:00', type: 'DEEP_WORK', source: 'USER', taskIds: [], status: 'PLANNED' };
@@ -180,7 +221,7 @@ describe('scheduler', () => {
       { id: 'c1', name: 'RED 课', schedule: [], health: 'RED', debt: { understanding: 2, assignment: 1, review: 0, exam: 0 } },
     ];
     const projects: Project[] = [
-      { id: 'p1', name: 'AS', status: 'ACTIVE', priority: 'HIGH' },
+      { id: 'p1', name: '课程大作业', status: 'ACTIVE', priority: 'HIGH' },
     ];
     const base = { estimateMinutes: 60, createdAt: '' };
     const tasks: Task[] = [
@@ -192,7 +233,7 @@ describe('scheduler', () => {
     const ranked = rankTasks(tasks, { courses, projects, contextMinutesThisWeek: {}, now: new Date() });
     expect(ranked[0].task.id).toBe('t2');
     expect(ranked[1].task.id).toBe('t3');
-    expect(ranked.find((r) => r.task.id === 't4')!.reasons).toContain('AS 是进行中项目');
+    expect(ranked.find((r) => r.task.id === 't4')!.reasons).toContain('课程大作业 是进行中项目');
     expect(ranked.at(-1)!.task.id).toBe('t1');
   });
 });

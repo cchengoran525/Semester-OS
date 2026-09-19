@@ -23,6 +23,8 @@ import {
   TypeTag,
 } from '../components/common';
 import { makeLabelResolver } from '../components/labels';
+import { TaskDetailModal } from '../components/TaskDetailModal';
+import { BlockDetailModal } from '../components/BlockDetailModal';
 import * as repos from '../storage/repositories';
 import { useDismissedSuggestions, useToast, useUndo } from '../store/uiStore';
 import {
@@ -46,12 +48,17 @@ import {
   rankTasks,
   scheduledTaskIds,
   suggestBlocks,
-  freeWindows,
   type Suggestion,
 } from '../services/scheduler';
 import { scheduleBlocksForDate } from '../services/scheduleService';
 import { aiConfig, deepAIConfig } from '../services/ai/config';
-import { suggestWeeklyPlan, weeklyBrief, type PlannedBlock } from '../services/ai/features';
+import {
+  reviewGap,
+  suggestWeeklyPlan,
+  type GapFinding,
+  type PlannedBlock,
+} from '../services/ai/features';
+import { collectUpcomingWindows } from '../services/planning';
 import {
   atTime,
   durationLabel,
@@ -71,44 +78,23 @@ const ALL_TYPES: BlockType[] = ['COURSE', 'DEEP_WORK', 'ENGINEERING', 'ENGLISH',
 
 const WEEKDAY_LABEL = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
 
-/** 未来 N 天的空闲窗口（课程块 + 自建块都算占用），AI 周计划与简报共用同一口径。 */
-function collectWeekWindows(
-  today: Date,
-  courses: import('../domain/types').Course[],
-  settings: NonNullable<import('../domain/types').Settings>,
-  blocks: Block[],
-  days = 7,
-  minMinutes = 60,
-): { date: string; start: string; end: string; minutes: number }[] {
-  const out: { date: string; start: string; end: string; minutes: number }[] = [];
-  for (let i = 0; i < days; i++) {
-    const d = new Date(today.getTime() + i * 86400000);
-    const dateISO = toISODate(d);
-    const sched = scheduleBlocksForDate(d, courses, settings);
-    const dayBlocks = [...blocks.filter((b) => b.start.slice(0, 10) === dateISO), ...sched];
-    for (const w of freeWindows(atTime(dateISO, '08:00'), atTime(dateISO, '22:00'), dayBlocks, minMinutes)) {
-      out.push({
-        date: dateISO,
-        start: w.start.slice(11, 16),
-        end: w.end.slice(11, 16),
-        minutes: w.minutes,
-      });
-    }
-  }
-  return out;
-}
-
 export function Dashboard() {
   const { courses, projects, milestones, tasks, blocks, outcomes, settings } = useApp();
   const show = useToast((s) => s.show);
   const [expandedCourse, setExpandedCourse] = useState<string | null>(null);
   const [draggingTask, setDraggingTask] = useState<Task | null>(null);
+  const [detailTask, setDetailTask] = useState<Task | null>(null);
+  const [detailBlock, setDetailBlock] = useState<Block | null>(null);
   const [tlPreview, setTlPreview] = useState<{ left: number; width: number } | null>(null);
-  const [brief, setBrief] = useState<string | null>(null);
-  const [briefBusy, setBriefBusy] = useState(false);
-  const [weekPlan, setWeekPlan] = useState<{ placement: PlannedBlock; task: Task }[] | null>(null);
+  const [gaps, setGaps] = useState<GapFinding[] | null>(null);
+  const [gapBusy, setGapBusy] = useState(false);
+  const [weekPlan, setWeekPlan] = useState<
+    { placement: PlannedBlock; task: Task }[] | null
+  >(null);
+  const [planFocus, setPlanFocus] = useState<string>('');
   const [planBusy, setPlanBusy] = useState(false);
   const [planSel, setPlanSel] = useState<Set<string>>(new Set());
+  const [newOutcome, setNewOutcome] = useState('');
   const aiCfg = aiConfig(settings);
   // 周计划是深度规划，走深度模型档（未单独配置时回落到快速模型）
   const deepCfg = deepAIConfig(settings);
@@ -194,20 +180,12 @@ export function Dashboard() {
         now: today,
       },
     );
-    const windowList: { date: string; window: { start: string; end: string; minutes: number } }[] = [];
-    // Look at next 7 days
-    for (let i = 0; i < 7; i++) {
-      const d = new Date(today.getTime() + i * 86400000);
-      const dateISO = toISODate(d);
-      const sched = scheduleBlocksForDate(d, courses, settings);
-      const dayBlocks = [
-        ...blocks.filter((b) => b.start.slice(0, 10) === dateISO),
-        ...sched,
-      ];
-      for (const w of freeWindows(atTime(dateISO, '08:00'), atTime(dateISO, '22:00'), dayBlocks, 60)) {
-        windowList.push({ date: dateISO, window: w });
-      }
-    }
+    // 只看未来：今天的窗口从"现在"起算，不会建议把任务排到过去
+    const windowList: { date: string; window: { start: string; end: string; minutes: number } }[] =
+      collectUpcomingWindows(today, courses, settings, blocks, 7, 60).map((w) => ({
+        date: w.date,
+        window: { start: atTime(w.date, w.start), end: atTime(w.date, w.end), minutes: w.minutes },
+      }));
     const suggestions = suggestBlocks({
       ranked,
       windows: windowList,
@@ -350,9 +328,17 @@ export function Dashboard() {
   );
 
   // 今日空闲时段（课程块 + 自建块都算占用）
+  // 今日空闲时段（课程块 + 自建块都算占用）；已过去的时间不算空闲
   const todayFree = useMemo(
-    () => freeWindows(atTime(todayISO, '08:00'), atTime(todayISO, '22:00'), todayAll, 30),
-    [todayAll, todayISO],
+    () =>
+      settings
+        ? collectUpcomingWindows(today, courses, settings, blocks, 1, 30).map((w) => ({
+            start: atTime(w.date, w.start),
+            end: atTime(w.date, w.end),
+            minutes: w.minutes,
+          }))
+        : [],
+    [blocks, courses, settings, today],
   );
 
   // 注意力账本：块的供给 vs 空闲（任务的完成情况不进这条账）
@@ -369,46 +355,66 @@ export function Dashboard() {
     return { allocated, free, byType };
   }, [todayAll, todayFree]);
 
-  const generateBrief = async () => {
-    if (!aiCfg || !settings) return;
-    setBriefBusy(true);
+  /**
+   * 计划 vs 实际对照：不做数据复述，只找偏离。
+   * 关键信号是"设置了的目标拿到了多少时间块"——这是用户看不到的对比。
+   */
+  const generateGaps = async () => {
+    if (!aiCfg) return;
+    setGapBusy(true);
     try {
-      // 与 suggestions 相同口径统计未来 7 天空闲窗口总时长
-      let freeMinutes = 0;
-      for (let i = 0; i < 7; i++) {
-        const d = new Date(today.getTime() + i * 86400000);
-        const dateISO = toISODate(d);
-        const sched = scheduleBlocksForDate(d, courses, settings);
-        const dayBlocks = [
-          ...blocks.filter((b) => b.start.slice(0, 10) === dateISO),
-          ...sched,
-        ];
-        for (const w of freeWindows(atTime(dateISO, '08:00'), atTime(dateISO, '22:00'), dayBlocks, 60)) {
-          freeMinutes += w.minutes;
-        }
-      }
-      const text = await weeklyBrief(aiCfg, {
+      const findings = await reviewGap(aiCfg, {
         weekLabel: `第 ${String(week.weekNumber).padStart(2, '0')} 周`,
-        suggestions: suggestions.map((s) => ({
-          taskTitle: s.task.title,
-          when: `${s.blockStart.slice(5, 10)} ${s.blockStart.slice(11, 16)}–${s.blockEnd.slice(11, 16)}`,
-          context: labels.contextLabel(s.context) ?? undefined,
-          reasons: s.reasons,
+        outcomes: weekOutcomes.map((o) => {
+          const linked = o.linkedTaskIds;
+          const linkedBlocks = blocks.filter((b) =>
+            b.taskIds.some((id) => linked.includes(id)),
+          );
+          const scheduledMinutes = linkedBlocks.reduce(
+            (sum, b) => sum + (b.actualMinutes ?? minutesBetween(b.start, b.end)),
+            0,
+          );
+          const completedLinked = tasks.filter(
+            (t) => linked.includes(t.id) && t.status === 'DONE',
+          ).length;
+          return {
+            title: o.title,
+            status: o.status === 'DONE' ? '已完成' : '未完成',
+            linkedTasks: linked.length,
+            scheduledMinutes,
+            completedLinked,
+          };
+        }),
+        completedTasks: tasks
+          .filter(
+            (t) =>
+              t.status === 'DONE' &&
+              t.completedAt != null &&
+              t.completedAt.slice(0, 10) >= week.startDate &&
+              t.completedAt.slice(0, 10) <= week.endDate,
+          )
+          .map((t) => ({ title: t.title, context: labels.taskContext(t) ?? undefined })),
+        deepWorkMinutes: deepWork.totalMinutes,
+        deepWorkByContext: Object.entries(deepWork.byContext).map(([ctx, minutes]) => ({
+          label: labels.contextLabel(ctx),
+          minutes,
         })),
-        outcomes: weekOutcomes.map((o) => ({
-          title: o.title,
-          status: o.status === 'DONE' ? '已完成' : '进行中',
+        allocation: allocation.map((a) => ({
+          label: BLOCK_TYPE_LABELS[a.type],
+          percent: a.percent,
+        })),
+        courses: courses.map((c) => ({
+          name: c.name,
+          health: HEALTH_LABELS[c.health],
+          debt: debtSummary(c.debt),
         })),
         warnings: warnings.map((w) => w.message),
-        deepWorkMinutes: deepWork.totalMinutes,
-        openTaskCount: tasks.filter((t) => t.status === 'READY' || t.status === 'DOING').length,
-        freeHours: Math.round(freeMinutes / 60),
       });
-      setBrief(text);
+      setGaps(findings);
     } catch (e) {
-      show(`AI 简报生成失败：${(e as Error).message}`, 'error');
+      show(`AI 对照失败：${(e as Error).message}`, 'error');
     } finally {
-      setBriefBusy(false);
+      setGapBusy(false);
     }
   };
 
@@ -428,8 +434,18 @@ export function Dashboard() {
         show('没有待排任务，先去任务页创建几个');
         return;
       }
-      const placements = await suggestWeeklyPlan(deepCfg, {
+      const plan = await suggestWeeklyPlan(deepCfg, {
         weekLabel: `第 ${String(week.weekNumber).padStart(2, '0')} 周`,
+        focusSource: {
+          outcomes: weekOutcomes.map((o) => ({
+            title: o.title,
+            status: o.status === 'DONE' ? '已完成' : '未完成',
+          })),
+          projectMilestones: activeProjects.map((p) => ({
+            project: p.name,
+            milestone: currentMilestone(p, milestones)?.name ?? '未设定',
+          })),
+        },
         tasks: ranked.map((r, i) => ({
           key: `T${i + 1}`,
           title: r.task.title,
@@ -444,7 +460,8 @@ export function Dashboard() {
             : null,
           context: labels.taskContext(r.task) ?? undefined,
         })),
-        windows: collectWeekWindows(today, courses, settings, blocks),
+        // 未来窗口：今天的时段从"现在"起算，计划不会落在过去
+        windows: collectUpcomingWindows(today, courses, settings, blocks, 7, 60),
         projects: activeProjects.map((p) => {
           const done = milestones.filter((m) => m.projectId === p.id && m.status === 'DONE').length;
           return `${p.name}（里程碑 ${done} 个已完成）`;
@@ -454,7 +471,7 @@ export function Dashboard() {
         ),
         warnings: warnings.map((w) => w.message),
       });
-      const rows = placements
+      const rows = plan.placements
         .map((placement) => {
           const idx = Number(placement.taskId.slice(1)) - 1;
           const rankedTask = ranked[idx];
@@ -465,6 +482,7 @@ export function Dashboard() {
         show('AI 的排期没有匹配到任何任务，请重试', 'error');
         return;
       }
+      setPlanFocus(plan.focus);
       setWeekPlan(rows);
       setPlanSel(new Set(rows.map((_, i) => String(i))));
     } catch (e) {
@@ -557,6 +575,8 @@ export function Dashboard() {
                 current={isCurrentBlock(b, today)}
                 droppable
                 draggable={b.source !== 'SCHEDULE'}
+                onClick={() => b.source !== 'SCHEDULE' && setDetailBlock(b)}
+                onTaskOpen={(t) => setDetailTask(t)}
                 onDelete={deleteBlock}
                 onComplete={completeBlock}
               />
@@ -675,6 +695,7 @@ export function Dashboard() {
                 task={t}
                 contextLabel={labels.taskContext(t)}
                 draggable
+                onClick={() => setDetailTask(t)}
                 onToggle={() =>
                   t.status === 'DONE'
                     ? repos.taskRepo.reopen(t.id)
@@ -687,7 +708,10 @@ export function Dashboard() {
           {/* THIS WEEK OUTCOMES */}
           <section className="panel" style={{ marginBottom: 14 }}>
             <h2>本周成果</h2>
-            {weekOutcomes.length === 0 && <EmptyState>本周还没有设定 Outcomes。建议 3–5 个。</EmptyState>}
+            <div className="faint small" style={{ marginBottom: 6 }}>
+              本周你想达成的 3–5 件事。AI 周计划以此定焦点，对照也会看它们的投入情况。
+            </div>
+            {weekOutcomes.length === 0 && <EmptyState>本周还没有设定目标。</EmptyState>}
             {weekOutcomes.map((o) => (
               <div key={o.id} className="task-row" style={{ paddingLeft: 0 }}>
                 <button
@@ -699,8 +723,33 @@ export function Dashboard() {
                 </button>
                 <span className="title" style={{ flex: 1 }}>{o.title}</span>
                 <span className="mono faint small">{o.linkedTaskIds.length} 个任务</span>
+                <button
+                  className="btn small subtle"
+                  aria-label={`删除目标 ${o.title}`}
+                  title="删除该目标"
+                  onClick={() => repos.outcomeRepo.remove(o.id)}
+                >
+                  ×
+                </button>
               </div>
             ))}
+            <input
+              style={{ marginTop: 8, width: '100%' }}
+              value={newOutcome}
+              placeholder="添加本周目标，回车写入"
+              aria-label="添加本周目标"
+              onChange={(e) => setNewOutcome(e.target.value)}
+              onKeyDown={async (e) => {
+                if (e.key !== 'Enter' || !newOutcome.trim()) return;
+                await repos.outcomeRepo.create({
+                  weekId: week.id,
+                  title: newOutcome.trim(),
+                  linkedTaskIds: [],
+                  status: 'OPEN',
+                });
+                setNewOutcome('');
+              }}
+            />
           </section>
 
           {/* SUGGESTIONS */}
@@ -788,10 +837,16 @@ export function Dashboard() {
             <AIThinking active={planBusy} />
             {!weekPlan ? (
               <div className="faint small">
-                把未来 7 天的空闲窗口和待排任务交给 AI 做一份整体排期草稿——每条带理由，勾选后才落库。
+                基于本周目标、课程债务和未来 7 天空闲窗口做一份有取舍的排期草稿：先定焦点，再排块，每条说明"为什么是它"。勾选后才落库。
               </div>
             ) : (
               <div>
+                {planFocus && (
+                  <div className="row-item" style={{ display: 'block', marginBottom: 10 }}>
+                    <div className="faint small">未来 7 天焦点</div>
+                    <div className="small" style={{ fontWeight: 500 }}>{planFocus}</div>
+                  </div>
+                )}
                 {weekPlan.map((row, i) => {
                   const d = new Date(row.placement.date + 'T00:00:00');
                   const dayLabel = `${row.placement.date.slice(5)} ${WEEKDAY_LABEL[d.getDay()]}`;
@@ -834,26 +889,37 @@ export function Dashboard() {
             )}
           </section>
 
-          {/* AI BRIEF */}
+          {/* AI GAP: 计划 vs 实际 */}
           <section className="panel" style={{ marginBottom: 14 }}>
             <h2 style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              AI 简报
+              AI 对照 · 计划 vs 实际
               <button
                 className="btn small subtle"
-                disabled={briefBusy || !aiCfg}
+                disabled={gapBusy || !aiCfg}
                 title={aiCfg ? undefined : '先在 设置 → AI 助手 里配置接口'}
-                onClick={generateBrief}
+                onClick={generateGaps}
               >
-                {briefBusy ? 'AI 思考中…' : brief ? '重新生成' : '生成本周简报'}
+                {gapBusy ? 'AI 思考中…' : gaps ? '重新对照' : '看看差在哪'}
               </button>
             </h2>
-            <AIThinking active={briefBusy} />
-            {brief ? (
-              <p className="small" style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{brief}</p>
-            ) : (
+            <AIThinking active={gapBusy} />
+            {gaps === null ? (
               <div className="faint small">
-                把下周排课建议和空闲窗口汇总成一段话，帮你决定注意力往哪放。
+                对照"本周设定的目标"和"实际投入的时间块"，只指出最值得注意的偏离（不汇总你已经看得到的数据）。
               </div>
+            ) : gaps.length === 0 ? (
+              <div className="small muted">计划与实际基本一致，没有发现明显偏离。</div>
+            ) : (
+              gaps.map((g, i) => (
+                <div key={i} className="row-item" style={{ display: 'block', marginBottom: 10 }}>
+                  <div className="small">{g.fact}</div>
+                  {g.action && (
+                    <div className="mono small muted" style={{ marginTop: 3 }}>
+                      → {g.action}
+                    </div>
+                  )}
+                </div>
+              ))
             )}
           </section>
 
@@ -872,6 +938,14 @@ export function Dashboard() {
           </section>
         </div>
       </div>
+
+      {detailTask && (
+        <TaskDetailModal task={detailTask} onClose={() => setDetailTask(null)} />
+      )}
+
+      {detailBlock && (
+        <BlockDetailModal block={detailBlock} onClose={() => setDetailBlock(null)} />
+      )}
 
       <DragOverlay dropAnimation={null}>
         {draggingTask ? (

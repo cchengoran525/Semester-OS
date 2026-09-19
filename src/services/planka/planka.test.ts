@@ -16,7 +16,7 @@ const config: PlankaConfig = {
 function card(overrides: Partial<PlankaCard> = {}): PlankaCard {
   return {
     id: 'card-1',
-    name: '整理信号系统第一章积压例题',
+    name: '整理数据结构第一章积压例题',
     description: '',
     isCompleted: false,
     listId: 'list-1',

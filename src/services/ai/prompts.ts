@@ -117,47 +117,74 @@ export function reviewUser(input: ReviewDraftInput): string {
   return parts.join('\n');
 }
 
-// ── 下周简报 ──────────────────────────────────────────────────────────
+// ── 计划 vs 实际对照 ──────────────────────────────────────────────────
 
-export const BRIEF_SYSTEM = `${BASE_SYSTEM}
+export const GAP_SYSTEM = `${BASE_SYSTEM}
 
-当前任务：把下周的排课建议与数据摘要写成一份给用户自己看的简报。
+当前任务：对照"你计划做的事"和"你实际投入的时间"，只指出最值得注意的偏离。
 
 要求：
-- 150 字以内。
-- 第一句直接说最重要的事；然后说空闲时间与任务量的匹配情况；最后给一条最值得注意的提醒。
-- 必须基于给出的数据，不编造。
-- 输出纯文本，不用 markdown 标题和列表符号。`;
+- 只输出 1–2 条偏离，宁缺毋滥。如果计划与实际基本一致，就返回空数组，不要硬找问题。
+- 每条必须引用数据中的具体事实（目标原文、投入分钟数、债务数字），绝不编造。
+- 判断偏离的标准：写了要做但投入为 0 或很少；没写却投入很多；债务最高的课程没拿到任何时间；注意力几乎全押在单一项目上。
+- fact 用一句平实的话说清"计划 vs 实际"的落差，不评判、不制造焦虑。
+- action 只给一个下周能直接执行的动作（排几个块 / 砍掉什么），不喊口号。
 
-export interface BriefInput {
+只输出 JSON 对象，不要输出任何其他文字：
+{"deviations": [{"fact": "计划要完成 X，实际没有为它安排任何时间块", "action": "下周给 X 排两个块"}]}`;
+
+export interface GapInput {
   weekLabel: string;
-  suggestions: { taskTitle: string; when: string; context?: string; reasons: string[] }[];
-  outcomes: { title: string; status: string }[];
-  warnings: string[];
+  outcomes: {
+    title: string;
+    status: string;
+    linkedTasks: number;
+    scheduledMinutes: number;
+    completedLinked: number;
+  }[];
+  completedTasks: { title: string; context?: string }[];
   deepWorkMinutes: number;
-  openTaskCount: number;
-  freeHours: number;
+  deepWorkByContext: { label: string; minutes: number }[];
+  allocation: { label: string; percent: number }[];
+  courses: { name: string; health: string; debt: string }[];
+  warnings: string[];
 }
 
-export function briefUser(input: BriefInput): string {
-  const parts: string[] = [`${input.weekLabel}规划数据如下。`];
+export function gapUser(input: GapInput): string {
+  const parts: string[] = [`${input.weekLabel}的计划与实际数据如下。`];
   parts.push(
-    `未来 7 天系统排课建议：${
-      input.suggestions.length > 0
-        ? input.suggestions
-            .map((s) => `${s.taskTitle} → ${s.when}${s.context ? `（${s.context}）` : ''}`)
+    `本周设定的目标（Outcomes）：${
+      input.outcomes.length > 0
+        ? input.outcomes
+            .map(
+              (o) =>
+                `${o.title}[${o.status}] — 关联任务 ${o.linkedTasks} 个，已排时间 ${o.scheduledMinutes} 分钟，已完成关联任务 ${o.completedLinked} 个`,
+            )
             .join('；')
+        : '未设定'
+    }`,
+  );
+  parts.push(
+    `本周完成的任务：${
+      input.completedTasks.length > 0
+        ? input.completedTasks.map((t) => `${t.title}（${t.context ?? '未关联'}）`).join('；')
         : '无'
     }`,
   );
-  if (input.outcomes.length > 0) {
+  parts.push(`深度工作总时长：${input.deepWorkMinutes} 分钟。`);
+  if (input.deepWorkByContext.length > 0) {
     parts.push(
-      `本周 Outcomes：${input.outcomes.map((o) => `${o.title}[${o.status}]`).join('；')}`,
+      `深度工作投入分布：${input.deepWorkByContext.map((d) => `${d.label} ${d.minutes} 分钟`).join('，')}。`,
     );
   }
-  parts.push(`待办任务 ${input.openTaskCount} 个，未来 7 天空闲窗口共 ${input.freeHours} 小时，本周深度工作 ${input.deepWorkMinutes} 分钟。`);
+  if (input.allocation.length > 0) {
+    parts.push(`注意力分配：${input.allocation.map((a) => `${a.label} ${a.percent}%`).join('，')}。`);
+  }
+  parts.push(
+    `课程状态：${input.courses.map((c) => `${c.name}[${c.health}]（${c.debt}）`).join('；') || '无'}`,
+  );
   if (input.warnings.length > 0) {
-    parts.push(`风险提示：${input.warnings.join('；')}`);
+    parts.push(`系统风险提示：${input.warnings.join('；')}`);
   }
   return parts.join('\n');
 }
@@ -166,21 +193,26 @@ export function briefUser(input: BriefInput): string {
 
 export const WEEK_PLAN_SYSTEM = `${BASE_SYSTEM}
 
-当前任务：为未来 7 天生成一份任务排期草稿（把哪个任务放进哪个空闲窗口）。
+当前任务：为未来 7 天做一份有取舍的排期草稿 —— 先定焦点，再排时间块。
 
 要求：
+- focus：一句话说清未来 7 天最重要的事，以及为了让位而暂缓/降级的事（引用给出的目标或债务）。这是整个输出的重点。
 - 只能使用给出的任务编号（T1、T2…），不能发明新任务。
-- 时间块必须完全落在给出的空闲窗口内，且不得与同一天的块重叠；单块建议 30–180 分钟；最多 10 条。
+- 时间块必须完全落在给出的空闲窗口内，且不得与同一天的其他块重叠；单块建议 30–180 分钟；最多 10 条。
 - 类型映射：写代码/建模/实验/调试→ENGINEERING；复习/写作业/写作/读文献→DEEP_WORK；缴费/跑腿/邮件/行政→ADMIN；英语学习→ENGLISH；休息恢复→RECOVERY。
-- 排期优先级：截止日近的 > 课程债务相关 > 进行中项目 > 其他；同一任务可拆多块，但不要把一天塞满，给突发事件留白。
-- reason 用一句话说明为什么排在这个时间（引用截止日、债务或项目进度）。
+- 排期优先级：未完成的本周目标 > 截止日近的 > 课程债务 > 进行中项目里程碑 > 其他；同一任务可拆多块，但不要把一天塞满，给突发留白。
+- reason 必须回答"为什么是它、而不是别的"：说清它推进了哪个目标/债务，以及因此暂缓了什么。
 
-只输出 JSON 数组，不要输出任何其他文字，元素格式：
-{"taskId": "T3", "date": "2026-09-08", "start": "14:00", "end": "15:30", "type": "ENGINEERING", "reason": "离截止日还有 2 天"}
+只输出 JSON 对象，不要输出任何其他文字：
+{"focus": "未来 7 天先推进 X，Y 暂缓（不超过 60 字）", "placements": [{"taskId": "T3", "date": "2026-09-08", "start": "14:00", "end": "15:30", "type": "ENGINEERING", "reason": "推进课程大作业里程碑；本周不给个人网站排更多块"}]}
 date 必须取自窗口列表里出现的日期；start/end 为 24 小时制 HH:mm。`;
 
 export interface WeekPlanInput {
   weekLabel: string;
+  focusSource: {
+    outcomes: { title: string; status: string }[];
+    projectMilestones: { project: string; milestone: string }[];
+  };
   tasks: {
     key: string;
     title: string;
@@ -197,6 +229,20 @@ export interface WeekPlanInput {
 
 export function weekPlanUser(input: WeekPlanInput): string {
   const parts: string[] = [`${input.weekLabel}的排期数据如下。`];
+  parts.push(
+    `本周目标（Outcomes）：${
+      input.focusSource.outcomes.length > 0
+        ? input.focusSource.outcomes.map((o) => `${o.title}[${o.status}]`).join('；')
+        : '未设定'
+    }`,
+  );
+  if (input.focusSource.projectMilestones.length > 0) {
+    parts.push(
+      `进行中项目的当前里程碑：${input.focusSource.projectMilestones
+        .map((m) => `${m.project} → ${m.milestone}`)
+        .join('；')}`,
+    );
+  }
   parts.push(
     `待排任务（编号即引用 ID）：\n${input.tasks
       .map(

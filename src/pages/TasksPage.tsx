@@ -11,7 +11,8 @@ import {
   type DragStartEvent,
 } from '@dnd-kit/core';
 import { useApp } from '../components/AppProvider';
-import { EmptyState, Modal, PriorityTag, TaskRow } from '../components/common';
+import { EmptyState, TaskRow } from '../components/common';
+import { TaskDetailModal } from '../components/TaskDetailModal';
 import { makeLabelResolver } from '../components/labels';
 import * as repos from '../storage/repositories';
 import { useToast, useUndo } from '../store/uiStore';
@@ -43,8 +44,9 @@ function TaskCard({
       {...drag.listeners}
       {...drag.attributes}
       className={`project-card ${drag.isDragging ? 'dragging' : ''}`}
+      onClick={onClick}
     >
-      {/* 看板窄卡用便签阅读模式：标题/副标题换行完整显示 */}
+      {/* 看板窄卡用便签阅读模式：标题/副标题换行完整显示；整卡点击打开详情 */}
       <div className="sticky-note kanban-note">
         <TaskRow
           task={task}
@@ -93,8 +95,6 @@ export function TasksPage() {
   const show = useToast((s) => s.show);
   const push = useUndo((s) => s.push);
   const [selected, setSelected] = useState<Task | null>(null);
-  const [actualInput, setActualInput] = useState('');
-
   const labels = useMemo(() => makeLabelResolver(projects, courses), [projects, courses]);
   const counts = useMemo(() => taskCounts(tasks), [tasks]);
 
@@ -166,10 +166,7 @@ export function TasksPage() {
                   key={t.id}
                   task={t}
                   contextLabel={labels.taskContext(t)}
-                  onClick={() => {
-                    setSelected(t);
-                    setActualInput(t.actualMinutes != null ? String(t.actualMinutes) : '');
-                  }}
+                  onClick={() => setSelected(t)}
                 />
               ))}
             </TaskColumn>
@@ -206,88 +203,7 @@ export function TasksPage() {
         </section>
       )}
 
-      {selected && (
-        <Modal title="任务详情" onClose={() => setSelected(null)}>
-          <div className="stack" style={{ marginBottom: 12 }}>
-            <div>
-              <strong>{selected.title}</strong>
-            </div>
-            <div className="small muted">
-              {selected.projectId
-                ? `项目：${labels.projectById.get(selected.projectId)?.name ?? '—'}`
-                : selected.courseId
-                  ? `课程：${labels.courseById.get(selected.courseId)?.name ?? '—'}`
-                  : '未关联'}
-            </div>
-            <div className="small muted mono">
-              预估：{durationLabel(selected.estimateMinutes)} · 状态：{TASK_STATUS_LABELS[selected.status]}
-            </div>
-            <div>
-              <PriorityTag priority={selected.priority} />
-            </div>
-            {selected.dueDate && <div className="small muted mono">截止：{selected.dueDate}</div>}
-            {selected.notes && <div className="small muted">备注：{selected.notes}</div>}
-          </div>
-
-          {selected.status === 'DONE' ? (
-            <label className="field">
-              <span>实际用时·分钟（可选）</span>
-              <input
-                type="number"
-                value={actualInput}
-                onChange={(e) => setActualInput(e.target.value)}
-                placeholder="实际用了多久？"
-              />
-            </label>
-          ) : (
-            <label className="field">
-              <span>记录实际用时后完成（可选）</span>
-              <input
-                type="number"
-                value={actualInput}
-                onChange={(e) => setActualInput(e.target.value)}
-                placeholder="留空 = 不记录"
-              />
-            </label>
-          )}
-
-          <div className="actions">
-            <button
-              className="btn subtle"
-              onClick={() => {
-                repos.taskRepo.update(selected.id, { status: 'BACKLOG' });
-                setSelected(null);
-                show('已移回待定');
-              }}
-            >
-              移回待定
-            </button>
-            <button
-              className="btn subtle"
-              onClick={async () => {
-                await repos.taskRepo.remove(selected.id);
-                setSelected(null);
-                show('任务已删除');
-              }}
-            >
-              删除
-            </button>
-            <button
-              className="btn primary"
-              onClick={() => {
-                if (selected.status === 'DONE') {
-                  repos.taskRepo.reopen(selected.id);
-                } else {
-                  repos.taskRepo.complete(selected.id, actualInput ? Number(actualInput) : undefined);
-                }
-                setSelected(null);
-              }}
-            >
-              {selected.status === 'DONE' ? '重新打开' : '完成'}
-            </button>
-          </div>
-        </Modal>
-      )}
+      {selected && <TaskDetailModal task={selected} onClose={() => setSelected(null)} />}
     </DndContext>
   );
 }
