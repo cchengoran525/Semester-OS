@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/semester-os-banner-dark.svg" />
+    <img alt="Semester OS — 把一整个学期装进一个操作系统" src="assets/semester-os-banner-light.svg" />
+  </picture>
+</p>
+
 # Semester OS — Personal Operating System
 
 一个本地优先（local-first）的「学期操作系统」：帮一个同时承担课程、工程项目、科研和杂务的大学生，

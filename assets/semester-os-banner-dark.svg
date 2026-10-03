@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="400" viewBox="0 0 1280 400" role="img" aria-labelledby="bannerTitle">
+  <title id="bannerTitle">Semester OS — 把一整个学期装进一个操作系统</title>
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#14171d"/>
+      <stop offset="1" stop-color="#0d0f12"/>
+    </linearGradient>
+    <linearGradient id="accentGrad" gradientUnits="userSpaceOnUse" x1="448" y1="0" x2="580" y2="0">
+      <stop offset="0" stop-color="#4f9cf7"/>
+      <stop offset="1" stop-color="#3ecf8e"/>
+    </linearGradient>
+    <linearGradient id="barGrad">
+      <stop offset="0" stop-color="#4f9cf7"/>
+      <stop offset="1" stop-color="#3ecf8e"/>
+    </linearGradient>
+    <radialGradient id="glowBlue">
+      <stop offset="0" stop-color="#4f9cf7" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#4f9cf7" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowGreen">
+      <stop offset="0" stop-color="#3ecf8e" stop-opacity="0.1"/>
+      <stop offset="1" stop-color="#3ecf8e" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="34" height="34" patternUnits="userSpaceOnUse">
+      <path d="M34 0H0V34" fill="none" stroke="#151920" stroke-width="1"/>
+    </pattern>
+    <clipPath id="cardClip"><rect x="14" y="14" width="1252" height="372" rx="20"/></clipPath>
+    <filter id="winShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#000000" flood-opacity="0.45"/>
+    </filter>
+    <filter id="dragShadow" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="16" stdDeviation="16" flood-color="#000000" flood-opacity="0.5"/>
+    </filter>
+  </defs>
+  
+  <rect x="14" y="14" width="1252" height="372" rx="20" fill="url(#bgGrad)" stroke="#262b33" stroke-width="1.5"/>
+  <g clip-path="url(#cardClip)">
+    <rect x="14" y="14" width="1252" height="372" fill="url(#grid)"/>
+    <ellipse cx="330" cy="-40" rx="540" ry="300" fill="url(#glowBlue)"/>
+    <ellipse cx="1160" cy="430" rx="460" ry="270" fill="url(#glowGreen)"/>
+
+    <!-- 窗口标题栏 -->
+    <circle cx="46" cy="39" r="6" fill="#ef6a5a"/>
+    <circle cx="70" cy="39" r="6" fill="#e3b341"/>
+    <circle cx="94" cy="39" r="6" fill="#3ecf8e"/>
+    <text x="118" y="44" font-family="'SF Mono','JetBrains Mono','Fira Code',ui-monospace,Menlo,Consolas,'Liberation Mono',monospace" font-size="14" fill="#9aa5b3">~/semester-os</text>
+    <line x1="14" y1="64.5" x2="1266" y2="64.5" stroke="#262b33" stroke-width="1.5"/>
+
+    <!-- 左列：字标 -->
+    <text x="64" y="216" font-family="-apple-system,'Segoe UI','PingFang SC','Hiragino Sans GB','Microsoft YaHei','Helvetica Neue',Arial,sans-serif" font-size="82" font-weight="800" letter-spacing="-1.5" fill="#e8edf4">Semester <tspan fill="url(#accentGrad)">OS</tspan></text>
+    <text x="64" y="260" font-family="-apple-system,'Segoe UI','PingFang SC','Hiragino Sans GB','Microsoft YaHei','Helvetica Neue',Arial,sans-serif" font-size="23" fill="#9aa5b3">把一整个学期，装进一个操作系统</text>
+    <rect x="64" y="288" width="76" height="6" rx="3" fill="url(#barGrad)"/>
+
+    <!-- 右侧：类 Planka 看板 -->
+    <rect x="640" y="84" width="576" height="280" rx="14" fill="#14171c" stroke="#333a44" stroke-width="1.5" filter="url(#winShadow)"/>
+    <circle cx="664" cy="102" r="4.5" fill="#ef6a5a"/>
+    <circle cx="683" cy="102" r="4.5" fill="#e3b341"/>
+    <circle cx="702" cy="102" r="4.5" fill="#3ecf8e"/>
+    <rect x="641" y="120.5" width="574" height="243" rx="12" fill="#0e1116"/>
+    <line x1="640" y1="120.5" x2="1216" y2="120.5" stroke="#262b33"/>
+
+    
+    <rect x="656" y="138" width="170" height="214" rx="10" fill="#161a20" stroke="#22272f"/>
+    <circle cx="672" cy="156" r="3.5" fill="#4f9cf7"/>
+    <text x="682" y="161" font-family="-apple-system,'Segoe UI','PingFang SC','Hiragino Sans GB','Microsoft YaHei','Helvetica Neue',Arial,sans-serif" font-size="12.5" font-weight="600" fill="#d7dce3">待办<tspan fill="#7d8794" font-weight="400" font-size="11">  2</tspan></text>
+    
+    <rect x="664" y="166" width="154" height="48" rx="8" fill="#1e242c" stroke="#2c333d"/>
+    <rect x="674" y="175" width="26" height="7" rx="3.5" fill="#4f9cf7"/>
+    <text x="674" y="198" font-family="-apple-system,'Segoe UI','PingFang SC','Hiragino Sans GB','Microsoft YaHei','Helvetica Neue',Arial,sans-serif" font-size="12.5" fill="#d7dce3">RTOS 实验预习</text>
+    
+    <rect x="664" y="222" width="154" height="48" rx="8" fill="#1e242c" stroke="#2c333d"/>
+    <rect x="674" y="231" width="26" height="7" rx="3.5" fill="#e3b341"/>
+    <text x="674" y="254" font-family="-apple-system,'Segoe UI','PingFang SC','Hiragino Sans GB','Microsoft YaHei','Helvetica Neue',Arial,sans-serif" font-size="12.5" fill="#d7dce3">高数习题 §4.2</text>
+    
+    
+    <rect x="843" y="138" width="170" height="214" rx="10" fill="#161a20" stroke="#22272f"/>
+    <circle cx="859" cy="156" r="3.5" fill="#e3b341"/>
+    <text x="869" y="161" font-family="-apple-system,'Segoe UI','PingFang SC','Hiragino Sans GB','Microsoft YaHei','Helvetica Neue',Arial,sans-serif" font-size="12.5" font-weight="600" fill="#d7dce3">进行中<tspan fill="#7d8794" font-weight="400" font-size="11">  1</tspan></text>
+    
+    <rect x="851" y="166" width="154" height="48" rx="8" fill="#1e242c" stroke="#2c333d"/>
+    <rect x="861" y="175" width="26" height="7" rx="3.5" fill="#3ecf8e"/>
+    <text x="861" y="198" font-family="-apple-system,'Segoe UI','PingFang SC','Hiragino Sans GB','Microsoft YaHei','Helvetica Neue',Arial,sans-serif" font-size="12.5" fill="#d7dce3">HappyMac 复盘</text>
+    <rect x="893" y="175" width="26" height="7" rx="3.5" fill="#e3b341"/><rect x="851" y="222" width="154" height="48" rx="8" fill="#4f9cf7" fill-opacity="0.05" stroke="#4f9cf7" stroke-opacity="0.55" stroke-dasharray="5 4"/>
+    
+    <rect x="1030" y="138" width="170" height="214" rx="10" fill="#161a20" stroke="#22272f"/>
+    <circle cx="1046" cy="156" r="3.5" fill="#3ecf8e"/>
+    <text x="1056" y="161" font-family="-apple-system,'Segoe UI','PingFang SC','Hiragino Sans GB','Microsoft YaHei','Helvetica Neue',Arial,sans-serif" font-size="12.5" font-weight="600" fill="#d7dce3">已完成<tspan fill="#7d8794" font-weight="400" font-size="11">  2</tspan></text>
+    
+    <rect x="1038" y="166" width="154" height="48" rx="8" fill="#1e242c" stroke="#2c333d"/>
+    <rect x="1048" y="175" width="26" height="7" rx="3.5" fill="#3ecf8e"/>
+    <text x="1048" y="198" font-family="-apple-system,'Segoe UI','PingFang SC','Hiragino Sans GB','Microsoft YaHei','Helvetica Neue',Arial,sans-serif" font-size="12.5" fill="#7d8794" style="text-decoration:line-through">AI 周计划</text>
+    
+    <rect x="1038" y="222" width="154" height="48" rx="8" fill="#1e242c" stroke="#2c333d"/>
+    <rect x="1048" y="231" width="26" height="7" rx="3.5" fill="#3ecf8e"/>
+    
+    <rect x="1048" y="247" width="96" height="6" rx="3" fill="#333a44"/>
+         <rect x="1048" y="257" width="64" height="6" rx="3" fill="#262b33"/>
+
+    <!-- 拖拽中的卡片 -->
+    <g transform="rotate(-4 935 228)" filter="url(#dragShadow)">
+      <rect x="858" y="204" width="154" height="48" rx="8" fill="#1e242c" stroke="#333a44" stroke-width="1.5"/>
+      <rect x="868" y="213" width="26" height="7" rx="3.5" fill="#4f9cf7"/>
+      <text x="868" y="236" font-family="-apple-system,'Segoe UI','PingFang SC','Hiragino Sans GB','Microsoft YaHei','Helvetica Neue',Arial,sans-serif" font-size="12.5" fill="#d7dce3">周复盘起草</text>
+    </g>
+  </g>
+</svg>
